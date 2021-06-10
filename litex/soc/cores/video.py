@@ -123,6 +123,17 @@ video_timings = {
         "v_sync_offset" : 4,
         "v_sync_width"  : 5,
     },
+    "1920x1200@60Hz": {
+        "pix_clk"       : 148.2e6,
+        "h_active"      : 1920,
+        "h_blanking"    : 80,
+        "h_sync_offset" : 8,
+        "h_sync_width"  : 32,
+        "v_active"      : 1200,
+        "v_blanking"    : 35,
+        "v_sync_offset" : 21,
+        "v_sync_width"  : 8,
+    },
 }
 
 # Video Timing Generator ---------------------------------------------------------------------------
@@ -656,36 +667,9 @@ class VideoFrameBuffer(Module, AutoCSR):
 
 class Open(Signal): pass
 
-# VGA (Generic).
+# Generic (Very Generic PHY supporting VGA/DVI and variations).
 
-class VideoVGAPHY(Module):
-    def __init__(self, pads, clock_domain="sys"):
-        self.sink = sink = stream.Endpoint(video_data_layout)
-
-        # # #
-
-        # Always ack Sink, no backpressure.
-        self.comb += sink.ready.eq(1)
-
-        # Drive VGA Clk (Optional).
-        if hasattr(pads, "clk"):
-            self.comb += pads.clk.eq(ClockSignal(clock_domain))
-
-        # Drive VGA Conrols.
-        self.specials += SDROutput(i=~sink.hsync, o=pads.hsync_n, clk=ClockSignal(clock_domain))
-        self.specials += SDROutput(i=~sink.vsync, o=pads.vsync_n, clk=ClockSignal(clock_domain))
-
-        # Drive VGA Datas.
-        cbits  = len(pads.r)
-        cshift = (8 - cbits)
-        for i in range(cbits):
-            self.specials += SDROutput(i=sink.r[cshift + i], o=pads.r[i], clk=ClockSignal(clock_domain))
-            self.specials += SDROutput(i=sink.g[cshift + i], o=pads.g[i], clk=ClockSignal(clock_domain))
-            self.specials += SDROutput(i=sink.b[cshift + i], o=pads.b[i], clk=ClockSignal(clock_domain))
-
-# DVI (Generic).
-
-class VideoDVIPHY(Module):
+class VideoGenericPHY(Module):
     def __init__(self, pads, clock_domain="sys", with_clk_ddr_output=True):
         self.sink = sink = stream.Endpoint(video_data_layout)
 
@@ -694,25 +678,38 @@ class VideoDVIPHY(Module):
         # Always ack Sink, no backpressure.
         self.comb += sink.ready.eq(1)
 
-        # Drive DVI Clk.
-        if with_clk_ddr_output:
-            self.specials += DDROutput(i1=1, i2=0, o=pads.clk, clk=ClockSignal(clock_domain))
-        else:
-            self.comb += pads.clk.eq(ClockSignal(clock_domain))
+        # Drive Clk.
+        if hasattr(pads, "clk"):
+            if with_clk_ddr_output:
+                self.specials += DDROutput(i1=1, i2=0, o=pads.clk, clk=ClockSignal(clock_domain))
+            else:
+                self.comb += pads.clk.eq(ClockSignal(clock_domain))
 
-        # Drive DVI Controls.
+        # Drive Controls.
         if hasattr(pads, "de"):
-            self.specials += SDROutput(i=sink.de,    o=pads.de,    clk=ClockSignal(clock_domain))
-        self.specials += SDROutput(i=sink.hsync, o=pads.hsync, clk=ClockSignal(clock_domain))
-        self.specials += SDROutput(i=sink.vsync, o=pads.vsync, clk=ClockSignal(clock_domain))
+            self.specials += SDROutput(i=sink.de, o=pads.de, clk=ClockSignal(clock_domain))
+        if hasattr(pads, "hsync_n") and hasattr(pads, "vsync_n"):
+            self.specials += SDROutput(i=~sink.hsync, o=pads.hsync_n, clk=ClockSignal(clock_domain))
+            self.specials += SDROutput(i=~sink.vsync, o=pads.vsync_n, clk=ClockSignal(clock_domain))
+        else:
+            self.specials += SDROutput(i=sink.hsync,  o=pads.hsync,   clk=ClockSignal(clock_domain))
+            self.specials += SDROutput(i=sink.vsync,  o=pads.vsync,   clk=ClockSignal(clock_domain))
 
-        # Drive DVI Datas.
+        # Drive Datas.
         cbits  = len(pads.r)
         cshift = (8 - cbits)
         for i in range(cbits):
             self.specials += SDROutput(i=sink.r[cshift + i], o=pads.r[i], clk=ClockSignal(clock_domain))
             self.specials += SDROutput(i=sink.g[cshift + i], o=pads.g[i], clk=ClockSignal(clock_domain))
             self.specials += SDROutput(i=sink.b[cshift + i], o=pads.b[i], clk=ClockSignal(clock_domain))
+
+# VGA (Generic).
+
+class VideoVGAPHY(VideoGenericPHY): pass
+
+# DVI (Generic).
+
+class VideoDVIPHY(VideoGenericPHY): pass
 
 # HDMI (Generic).
 
