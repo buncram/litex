@@ -1326,7 +1326,7 @@ class LiteXSoC(SoC):
                         self.submodules += LiteDRAMWishbone2Native(
                             wishbone     = litedram_wb,
                             port         = port,
-                            base_address = origin)
+                            base_address = self.bus.regions["main_ram"].origin)
                         self.submodules += wishbone.Converter(mem_wb, litedram_wb)
                 # Check if bus is a Native bus and connect it.
                 if isinstance(mem_bus, LiteDRAMNativePort):
@@ -1702,7 +1702,7 @@ class LiteXSoC(SoC):
         # Connect Video Timing Generator to ColorsBars Pattern.
         self.comb += [
             vtg.source.connect(colorbars.vtg_sink),
-            colorbars.source.connect(phy.sink)
+            colorbars.source.connect(phy if isinstance(phy, stream.Endpoint) else phy.sink)
         ]
 
     # Add Video Terminal ---------------------------------------------------------------------------
@@ -1732,13 +1732,13 @@ class LiteXSoC(SoC):
         uart_cdc = stream.ClockDomainCrossing([("data", 8)], cd_from="sys", cd_to=clock_domain)
         setattr(self.submodules, f"{name}_uart_cdc", uart_cdc)
         self.comb += [
-            uart_cdc.sink.valid.eq(self.uart.source.valid & self.uart.source.ready),
-            uart_cdc.sink.data.eq(self.uart.source.data),
+            uart_cdc.sink.valid.eq(self.uart.tx_fifo.source.valid & self.uart.tx_fifo.source.ready),
+            uart_cdc.sink.data.eq(self.uart.tx_fifo.source.data),
             uart_cdc.source.connect(vt.uart_sink),
         ]
 
         # Connect Video Terminal to Video PHY.
-        self.comb += vt.source.connect(phy.sink)
+        self.comb += vt.source.connect(phy if isinstance(phy, stream.Endpoint) else phy.sink)
 
     # Add Video Framebuffer ------------------------------------------------------------------------
     def add_video_framebuffer(self, name="video_framebuffer", phy=None, timings="800x600@60Hz", clock_domain="sys"):
@@ -1768,7 +1768,7 @@ class LiteXSoC(SoC):
         self.comb += vtg.source.connect(vfb.vtg_sink)
 
         # Connect Video FrameBuffer to Video PHY.
-        self.comb += vfb.source.connect(phy.sink)
+        self.comb += vfb.source.connect(phy if isinstance(phy, stream.Endpoint) else phy.sink)
 
         # Constants.
         self.add_constant("VIDEO_FRAMEBUFFER_BASE", base)
