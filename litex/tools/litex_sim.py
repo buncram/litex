@@ -24,9 +24,10 @@ from litex.soc.integration.soc import *
 from litex.soc.cores.bitbang import *
 from litex.soc.cores.cpu import CPUS
 
+
 from litedram import modules as litedram_modules
 from litedram.modules import parse_spd_hexdump
-from litedram.common import *
+from litedram.phy.model import sdram_module_nphases, get_sdram_phy_settings
 from litedram.phy.model import SDRAMPHYModel
 
 from liteeth.phy.model import LiteEthPHYModel
@@ -73,6 +74,19 @@ _io = [
         Subsignal("sda_out", Pins(1)),
         Subsignal("sda_in",  Pins(1)),
     ),
+    ("spiflash", 0,
+        Subsignal("cs_n", Pins(1)),
+        Subsignal("clk",  Pins(1)),
+        Subsignal("mosi", Pins(1)),
+        Subsignal("miso", Pins(1)),
+        Subsignal("wp",   Pins(1)),
+        Subsignal("hold", Pins(1)),
+    ),
+    ("spiflash4x", 0,
+        Subsignal("cs_n", Pins(1)),
+        Subsignal("clk",  Pins(1)),
+        Subsignal("dq",   Pins(4)),
+    ),
 ]
 
 # Platform -----------------------------------------------------------------------------------------
@@ -81,78 +95,10 @@ class Platform(SimPlatform):
     def __init__(self):
         SimPlatform.__init__(self, "SIM", _io)
 
-# DFI PHY model settings ---------------------------------------------------------------------------
-
-sdram_module_nphases = {
-    "SDR":   1,
-    "DDR":   2,
-    "LPDDR": 2,
-    "DDR2":  2,
-    "DDR3":  4,
-    "DDR4":  4,
-}
-
-def get_sdram_phy_settings(memtype, data_width, clk_freq):
-    nphases = sdram_module_nphases[memtype]
-
-    if memtype == "SDR":
-        # Settings from gensdrphy
-        rdphase       = 0
-        wrphase       = 0
-        cl            = 2
-        cwl           = None
-        read_latency  = 4
-        write_latency = 0
-    elif memtype in ["DDR", "LPDDR"]:
-        # Settings from s6ddrphy
-        rdphase       = 0
-        wrphase       = 1
-        cl            = 3
-        cwl           = None
-        read_latency  = 5
-        write_latency = 0
-    elif memtype in ["DDR2", "DDR3"]:
-        # Settings from s7ddrphy
-        tck             = 2/(2*nphases*clk_freq)
-        cl, cwl         = get_default_cl_cwl(memtype, tck)
-        cl_sys_latency  = get_sys_latency(nphases, cl)
-        cwl_sys_latency = get_sys_latency(nphases, cwl)
-        rdphase         = get_sys_phase(nphases, cl_sys_latency, cl)
-        wrphase         = get_sys_phase(nphases, cwl_sys_latency, cwl)
-        read_latency    = cl_sys_latency + 6
-        write_latency   = cwl_sys_latency - 1
-    elif memtype == "DDR4":
-        # Settings from usddrphy
-        tck             = 2/(2*nphases*clk_freq)
-        cl, cwl         = get_default_cl_cwl(memtype, tck)
-        cl_sys_latency  = get_sys_latency(nphases, cl)
-        cwl_sys_latency = get_sys_latency(nphases, cwl)
-        rdphase         = get_sys_phase(nphases, cl_sys_latency, cl)
-        wrphase         = get_sys_phase(nphases, cwl_sys_latency, cwl)
-        read_latency    = cl_sys_latency + 5
-        write_latency   = cwl_sys_latency - 1
-
-    sdram_phy_settings = {
-        "nphases":       nphases,
-        "rdphase":       rdphase,
-        "wrphase":       wrphase,
-        "cl":            cl,
-        "cwl":           cwl,
-        "read_latency":  read_latency,
-        "write_latency": write_latency,
-    }
-
-    return PhySettings(
-        phytype      = "SDRAMPHYModel",
-        memtype      = memtype,
-        databits     = data_width,
-        dfi_databits = data_width if memtype == "SDR" else 2*data_width,
-        **sdram_phy_settings,
-    )
-
 # Simulation SoC -----------------------------------------------------------------------------------
 
 class SimSoC(SoCCore):
+    mem_map = {**SoCCore.mem_map, **{"spiflash": 0x80000000}}
     def __init__(self,
         with_sdram            = False,
         with_ethernet         = False,
@@ -167,6 +113,8 @@ class SimSoC(SoCCore):
         sdram_verbosity       = 0,
         with_i2c              = False,
         with_sdcard           = False,
+        with_spi_flash        = False,
+        spi_flash_init        = [],
         sim_debug             = False,
         trace_reset_on        = False,
         **kwargs):
@@ -183,7 +131,7 @@ class SimSoC(SoCCore):
         self.submodules.crg = CRG(platform.request("sys_clk"))
 
         # SDRAM ------------------------------------------------------------------------------------
-        if with_sdram:
+        if not self.integrated_main_ram_size and with_sdram:
             sdram_clk_freq = int(100e6) # FIXME: use 100MHz timings
             if sdram_spd_data is None:
                 sdram_module_cls = getattr(litedram_modules, sdram_module)
@@ -191,16 +139,12 @@ class SimSoC(SoCCore):
                 sdram_module     = sdram_module_cls(sdram_clk_freq, sdram_rate)
             else:
                 sdram_module = litedram_modules.SDRAMModule.from_spd_data(sdram_spd_data, sdram_clk_freq)
-            phy_settings     = get_sdram_phy_settings(
-                memtype    = sdram_module.memtype,
-                data_width = sdram_data_width,
-                clk_freq   = sdram_clk_freq)
             self.submodules.sdrphy = SDRAMPHYModel(
-                module    = sdram_module,
-                settings  = phy_settings,
-                clk_freq  = sdram_clk_freq,
-                verbosity = sdram_verbosity,
-                init      = sdram_init)
+                module     = sdram_module,
+                data_width = sdram_data_width,
+                clk_freq   = sdram_clk_freq,
+                verbosity  = sdram_verbosity,
+                init       = sdram_init)
             self.add_sdram("sdram",
                 phy                     = self.sdrphy,
                 module                  = sdram_module,
@@ -304,6 +248,18 @@ class SimSoC(SoCCore):
         if with_sdcard:
             self.add_sdcard("sdcard", use_emulator=True)
 
+        # SPI Flash --------------------------------------------------------------------------------
+        if with_spi_flash:
+            from litespi.phy.model import LiteSPIPHYModel
+            from litespi.modules import S25FL128L
+            from litespi.opcodes import SpiNorFlashOpCodes as Codes
+            spiflash_module = S25FL128L(Codes.READ_1_1_4)
+            if spi_flash_init is None:
+                platform.add_sources(os.path.abspath(os.path.dirname(__file__)), "../build/sim/verilog/iddr_verilog.v")
+                platform.add_sources(os.path.abspath(os.path.dirname(__file__)), "../build/sim/verilog/oddr_verilog.v")
+            self.submodules.spiflash_phy = LiteSPIPHYModel(spiflash_module, init=spi_flash_init)
+            self.add_spi_flash(phy=self.spiflash_phy, mode="4x", module=spiflash_module, with_master=True)
+
         # Simulation debugging ----------------------------------------------------------------------
         if sim_debug:
             platform.add_debug(self, reset=1 if trace_reset_on else 0)
@@ -367,6 +323,8 @@ def sim_args(parser):
     parser.add_argument("--with-analyzer",        action="store_true",     help="Enable Analyzer support")
     parser.add_argument("--with-i2c",             action="store_true",     help="Enable I2C support")
     parser.add_argument("--with-sdcard",          action="store_true",     help="Enable SDCard support")
+    parser.add_argument("--with-spi-flash",       action="store_true",     help="Enable SPI Flash (MMAPed)")
+    parser.add_argument("--spi_flash-init",       default=None,            help="SPI Flash init file")
     parser.add_argument("--trace",                action="store_true",     help="Enable Tracing")
     parser.add_argument("--trace-fst",            action="store_true",     help="Enable FST tracing (default=VCD)")
     parser.add_argument("--trace-start",          default="0",             help="Time to start tracing (ps)")
@@ -374,6 +332,7 @@ def sim_args(parser):
     parser.add_argument("--opt-level",            default="O3",            help="Compilation optimization level")
     parser.add_argument("--sim-debug",            action="store_true",     help="Add simulation debugging modules")
     parser.add_argument("--gtkwave-savefile",     action="store_true",     help="Generate GTKWave savefile")
+    parser.add_argument("--non-interactive",      action="store_true",     help="Run simulation without user input")
 
 def main():
     parser = argparse.ArgumentParser(description="Generic LiteX SoC Simulation")
@@ -390,27 +349,34 @@ def main():
     # Configuration --------------------------------------------------------------------------------
 
     cpu = CPUS.get(soc_kwargs.get("cpu_type", "vexriscv"))
+
+    # UART.
     if soc_kwargs["uart_name"] == "serial":
         soc_kwargs["uart_name"] = "sim"
         sim_config.add_module("serial2console", "serial")
+
+    # ROM.
     if args.rom_init:
         soc_kwargs["integrated_rom_init"] = get_mem_data(args.rom_init, cpu.endianness)
-    if not args.with_sdram:
-        soc_kwargs["integrated_main_ram_size"] = 0x10000000 # 256 MB
+
+    # RAM / SDRAM.
+    soc_kwargs["integrated_main_ram_size"] = args.integrated_main_ram_size
+    if args.integrated_main_ram_size:
         if args.ram_init is not None:
             soc_kwargs["integrated_main_ram_init"] = get_mem_data(args.ram_init, cpu.endianness)
-    else:
+    elif args.with_sdram:
         assert args.ram_init is None
-        soc_kwargs["integrated_main_ram_size"] = 0x0
-        soc_kwargs["sdram_module"]             = args.sdram_module
-        soc_kwargs["sdram_data_width"]         = int(args.sdram_data_width)
-        soc_kwargs["sdram_verbosity"]          = int(args.sdram_verbosity)
+        soc_kwargs["sdram_module"]     = args.sdram_module
+        soc_kwargs["sdram_data_width"] = int(args.sdram_data_width)
+        soc_kwargs["sdram_verbosity"]  = int(args.sdram_verbosity)
         if args.sdram_from_spd_dump:
             soc_kwargs["sdram_spd_data"] = parse_spd_hexdump(args.sdram_from_spd_dump)
 
+    # Ethernet.
     if args.with_ethernet or args.with_etherbone:
         sim_config.add_module("ethernet", "eth", args={"interface": "tap0", "ip": args.remote_ip})
 
+    # I2C.
     if args.with_i2c:
         sim_config.add_module("spdeeprom", "i2c")
 
@@ -425,9 +391,11 @@ def main():
         with_analyzer  = args.with_analyzer,
         with_i2c       = args.with_i2c,
         with_sdcard    = args.with_sdcard,
+        with_spi_flash = args.with_spi_flash,
         sim_debug      = args.sim_debug,
         trace_reset_on = trace_start > 0 or trace_end > 0,
         sdram_init     = [] if args.sdram_init is None else get_mem_data(args.sdram_init, cpu.endianness),
+        spi_flash_init = None if args.spi_flash_init is None else get_mem_data(args.spi_flash_init, "big"),
         **soc_kwargs)
     if args.ram_init is not None or args.sdram_init is not None:
         soc.add_constant("ROM_BOOT_ADDRESS", soc.mem_map["main_ram"])
@@ -452,7 +420,8 @@ def main():
             trace       = args.trace,
             trace_fst   = args.trace_fst,
             trace_start = trace_start,
-            trace_end   = trace_end
+            trace_end   = trace_end,
+            interactive = not args.non_interactive
         )
         if args.with_analyzer:
             soc.analyzer.export_csv(vns, "analyzer.csv")
