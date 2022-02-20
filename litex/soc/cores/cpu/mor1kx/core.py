@@ -22,12 +22,13 @@ CPU_VARIANTS = ["standard", "standard+fpu", "linux", "linux+fpu", "linux+smp", "
 # Mor1kx -------------------------------------------------------------------------------------------
 
 class MOR1KX(CPU):
+    family               = "or1k"
     name                 = "mor1kx"
     human_name           = "MOR1KX"
     variants             = CPU_VARIANTS
     data_width           = 32
     endianness           = "big"
-    gcc_triple           = "or1k-elf"
+    gcc_triple           = ("or1k-elf", "or1k-linux")
     clang_triple         = "or1k-linux"
     linker_output_format = "elf32-or1k"
     nop                  = "l.nop"
@@ -45,11 +46,6 @@ class MOR1KX(CPU):
             "sram"     : 0x50000000,
             "csr"      : 0xe0000000,
         }
-
-    # GCC Triple.
-    @property
-    def gcc_triple(self):
-        return "or1k-elf"
 
     # GCC Flags.
     @property
@@ -193,7 +189,6 @@ class MOR1KX(CPU):
         self.add_sources(platform)
 
     def set_reset_address(self, reset_address):
-        assert not hasattr(self, "reset_address")
         self.reset_address = reset_address
         self.cpu_params.update(p_OPTION_RESET_PC=reset_address)
 

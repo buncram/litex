@@ -46,13 +46,25 @@ def _format_qsf_constraint(signame, pin, others, resname):
     fmt_c = [_format_constraint(c, signame, fmt_r) for c in ([Pins(pin)] + others)]
     return '\n'.join(fmt_c)
 
+def _is_virtual_pin(pin_name):
+    return pin_name in (
+        "altera_reserved_tms",
+        "altera_reserved_tck",
+        "altera_reserved_tdi",
+        "altera_reserved_tdo",
+    )
+
 def _build_qsf_constraints(named_sc, named_pc):
     qsf = []
     for sig, pins, others, resname in named_sc:
         if len(pins) > 1:
             for i, p in enumerate(pins):
+                if _is_virtual_pin(p):
+                    continue
                 qsf.append(_format_qsf_constraint("{}[{}]".format(sig, i), p, others, resname))
         else:
+            if _is_virtual_pin(pins[0]):
+                continue
             qsf.append(_format_qsf_constraint(sig, pins[0], others, resname))
     if named_pc:
         qsf.append("\n\n".join(named_pc))
@@ -149,7 +161,14 @@ quartus_fit --read_settings_files=off --write_settings_files=off {build_name} -c
 quartus_asm --read_settings_files=off --write_settings_files=off {build_name} -c {build_name}
 quartus_sta {build_name} -c {build_name}"""
     if create_rbf:
-        script_contents += """
+        if sys.platform in ["win32", "cygwin"]:
+          script_contents += """
+if exist "{build_name}.sof" (
+    quartus_cpf -c {build_name}.sof {build_name}.rbf
+)
+"""
+        else:
+          script_contents += """
 if [ -f "{build_name}.sof" ]
 then
     quartus_cpf -c {build_name}.sof {build_name}.rbf

@@ -155,7 +155,10 @@ class ConnectorManager:
         r = []
         for identifier in identifiers:
             if ":" in identifier:
-                conn, pn = identifier.split(":")
+                try:
+                    conn, pn = identifier.split(":")
+                except ValueError as err:
+                    raise ValueError(f"\"{identifier}\" {err}") from err
                 if pn.isdigit():
                     pn = int(pn)
 
@@ -275,12 +278,14 @@ class ConstraintManager:
             if has_subsignals:
                 for element in resource[2:]:
                     if isinstance(element, Subsignal):
-                        sig = getattr(obj, element.name)
-                        pins, others = _separate_pins(top_constraints +
-                                                      element.constraints)
-                        pins = self.connector_manager.resolve_identifiers(pins)
-                        r.append((sig, pins, others,
-                                  (name, number, element.name)))
+                        # Because we could have removed one Signal From the record
+                        if hasattr(obj, element.name):
+                            sig = getattr(obj, element.name)
+                            pins, others = _separate_pins(top_constraints +
+                                                        element.constraints)
+                            pins = self.connector_manager.resolve_identifiers(pins)
+                            r.append((sig, pins, others,
+                                    (name, number, element.name)))
             else:
                 pins, others = _separate_pins(top_constraints)
                 pins = self.connector_manager.resolve_identifiers(pins)
@@ -362,19 +367,23 @@ class GenericPlatform:
             except ConstraintError:
                 pass
 
-    def add_source(self, filename, language=None, library=None):
+    def add_source(self, filename, language=None, library=None, copy=False):
+        filename = os.path.abspath(filename)
         if language is None:
             language = tools.language_by_filename(filename)
         if library is None:
             library = "work"
-        for f, _, _ in self.sources:
+        for f, *_ in self.sources:
             if f == filename:
                 return
-        self.sources.append((os.path.abspath(filename), language, library))
+        if copy:
+            self.sources.append((filename, language, library, True))
+        else:
+            self.sources.append((filename, language, library))
 
-    def add_sources(self, path, *filenames, language=None, library=None):
+    def add_sources(self, path, *filenames, language=None, library=None, copy=False):
         for f in filenames:
-            self.add_source(os.path.join(path, f), language, library)
+            self.add_source(os.path.join(path, f), language, library, copy)
 
     def add_source_dir(self, path, recursive=True, language=None, library=None):
         dir_files = []
@@ -411,10 +420,7 @@ class GenericPlatform:
         return named_sc, named_pc
 
     def get_verilog(self, fragment, **kwargs):
-        return verilog.convert(
-            fragment,
-            self.constraint_manager.get_io_signals(),
-            create_clock_domains=False, **kwargs)
+        return verilog.convert(fragment, platform=self, **kwargs)
 
     def get_edif(self, fragment, cell_library, vendor, device, **kwargs):
         return edif.convert(

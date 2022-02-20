@@ -21,6 +21,7 @@ CPU_VARIANTS = ["standard"]
 # Minerva ------------------------------------------------------------------------------------------
 
 class Minerva(CPU):
+    family               = "riscv"
     name                 = "minerva"
     human_name           = "Minerva"
     variants             = CPU_VARIANTS
@@ -89,7 +90,6 @@ class Minerva(CPU):
         )
 
     def set_reset_address(self, reset_address):
-        assert not hasattr(self, "reset_address")
         self.reset_address = reset_address
 
     @staticmethod

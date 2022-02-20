@@ -22,12 +22,14 @@ class OpenFPGALoader(GenericProgrammer):
             self.cmd += ["--freq", str(int(float(freq)))]
 
     def load_bitstream(self, bitstream_file):
-        self.cmd += ["--bitstream", bitstream_file]
-        self.call(self.cmd)
+        cmd = self.cmd + ["--bitstream", bitstream_file]
+        self.call(cmd)
 
-    def flash(self, address, data_file):
-        self.cmd += ["--write-flash", "--bitstream", data_file]
+    def flash(self, address, data_file, external=False):
+        cmd = self.cmd + ["--write-flash", "--bitstream", data_file]
+        if external:
+            cmd += ["--external-flash"]
         if address:
-            self.cmd.append("--offset")
-            self.cmd.append(address)
-        self.call(self.cmd)
+            cmd += ["--offset"]
+            cmd += [str(address)]
+        self.call(cmd)

@@ -65,7 +65,7 @@ int sdcard_wait_response(void);
 /* SDCard clocker functions                                              */
 /*-----------------------------------------------------------------------*/
 
-void sdcard_set_clk_freq(uint32_t clk_freq, int show);
+void sdcard_set_clk_freq(unsigned long clk_freq, int show);
 
 /*-----------------------------------------------------------------------*/
 /* SDCard commands functions                                             */
@@ -103,6 +103,7 @@ void sdcard_decode_csd(void);
 int sdcard_init(void);
 void sdcard_read(uint32_t sector, uint32_t count, uint8_t* buf);
 void sdcard_write(uint32_t sector, uint32_t count, uint8_t* buf);
+void fatfs_set_ops_sdcard(void);
 
 #endif /* CSR_SDCORE_BASE */
 

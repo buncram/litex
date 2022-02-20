@@ -82,13 +82,13 @@ else:
         def handle_escape(self, b):
             return None
 
-# Bridge UART  -------------------------------------------------------------------------------------
+# Crossover UART  -------------------------------------------------------------------------------------
 
 from litex import RemoteClient
 
-class BridgeUART:
-    def __init__(self, name="uart_xover", host="localhost", base_address=0): # FIXME: add command line arguments
-        self.bus = RemoteClient(host=host, base_address=base_address)
+class CrossoverUART:
+    def __init__(self, name="uart_xover", host="localhost", base_address=None, csr_csv=None):
+        self.bus = RemoteClient(host=host, base_address=base_address, csr_csv=csr_csv)
         present = False
         for k, v in self.bus.regs.d.items():
             if f"{name}_" in k:
@@ -96,6 +96,10 @@ class BridgeUART:
                 present = True
         if not present:
             raise ValueError(f"CrossoverUART {name} not present in design.")
+
+        # FIXME: On PCIe designs, CSR is remapped to 0 to limit BAR0 size.
+        if base_address is None and hasattr(self.bus.bases, "pcie_phy"):
+            self.bus.base_address = -self.bus.mems.csr.base
 
     def open(self):
         self.bus.open()
@@ -204,8 +208,7 @@ sfl_prompt_ack = b"\x06"
 sfl_magic_req = b"sL5DdSMmkekro\n"
 sfl_magic_ack = b"z6IHG7cYDID6o\n"
 
-sfl_payload_length = 255
-sfl_outstanding    = 128
+sfl_payload_length  = 255
 
 # General commands
 sfl_cmd_abort       = b"\x00"
@@ -281,7 +284,7 @@ def crc16(l):
 # LiteXTerm ----------------------------------------------------------------------------------------
 
 class LiteXTerm:
-    def __init__(self, serial_boot, kernel_image, kernel_address, json_images):
+    def __init__(self, serial_boot, kernel_image, kernel_address, json_images, safe):
         self.serial_boot = serial_boot
         assert not (kernel_image is not None and json_images is not None)
         self.mem_regions = {}
@@ -300,26 +303,21 @@ class LiteXTerm:
         self.writer_alive = False
 
         self.prompt_detect_buffer = bytes(len(sfl_prompt_req))
-        self.magic_detect_buffer = bytes(len(sfl_magic_req))
+        self.magic_detect_buffer  = bytes(len(sfl_magic_req))
 
         self.console = Console()
 
         signal.signal(signal.SIGINT, self.sigint)
         self.sigint_time_last = 0
 
+        self.safe        = safe
+        self.delay       = 0
+        self.length      = 64
+        self.outstanding = 0 if safe else 128
+
     def open(self, port, baudrate):
         if hasattr(self, "port"):
             return
-        # FIXME: https://github.com/enjoy-digital/litex/issues/720
-        if "ttyACM" in port:
-            self.payload_length = sfl_payload_length
-            self.delay          = 1e-4
-        elif "tty.usbmodem" in port:
-            self.payload_length = sfl_payload_length
-            self.delay          = 1e-3
-        else:
-            self.payload_length = 64
-            self.delay          = 1e-5
         self.port = serial.serial_for_url(port, baudrate)
 
     def close(self):
@@ -351,7 +349,7 @@ class LiteXTerm:
             elif reply == sfl_ack_crcerror:
                 retry = 1
             else:
-                print("[LXTERM] Got unknown reply '{}' from the device, aborting.".format(reply))
+                print("[LITEX-TERM] Got unknown reply '{}' from the device, aborting.".format(reply))
                 return 0
         return 1
 
@@ -360,10 +358,74 @@ class LiteXTerm:
         if reply == sfl_ack_success:
             return True
         elif reply == sfl_ack_crcerror:
-            print("[LXTERM] Upload to device failed due to data corruption (CRC error)")
+            print("[LITEX-TERM] Upload to device failed due to data corruption (CRC error)")
         else:
-            print(f"[LXTERM] Got unexpected response from device '{reply}'")
+            print(f"[LITEX-TERM] Got unexpected response from device '{reply}'")
         sys.exit(1)
+
+    def upload_calibration(self, address):
+
+        print("[LITEX-TERM] Upload calibration... ", end="")
+        sys.stdout.flush()
+
+        # Calibration parameters.
+        min_delay    = 1e-5
+        max_delay    = 1e-3
+        nframes      = 16
+        length_range = [64]
+
+        # Run calibration with increasing delay and decreasing length.
+        delay = min_delay
+        working_delay  = None
+        working_length = None
+        while delay <= max_delay:
+            for length in length_range:
+                #p0rint(f"delay {delay}, length {length}")
+                # Prepare frame.
+                frame         = SFLFrame()
+                frame.cmd     = sfl_cmd_load
+                frame_data    = bytearray(min(length, sfl_payload_length-4))
+                frame.payload = address.to_bytes(4, "big")
+                frame.payload += frame_data
+                frame = frame.encode()
+
+                # Send N consecutive frames.
+                for i in range(nframes):
+                    self.port.write(frame)
+                    time.sleep(delay)
+
+                # Wait and get acks.
+                working = True
+                time.sleep(0.2)
+                while self.port.in_waiting:
+                    ack = self.port.read()
+                    #print(ack)
+                    if ack in [sfl_ack_error, sfl_ack_crcerror]:
+                        working = False
+
+                if working:
+                    # Save working delay/length and exit.
+                    working_delay  = delay
+                    working_length = min(length, sfl_payload_length - 4)
+                    break
+
+            # Exit if working delay found.
+            if (working_delay is not None):
+                break
+
+            # Else increase delay.
+            delay = delay*2
+
+        # Set parameters.
+        if (working_delay is not None):
+            print(f"(inter-frame: {working_delay*1e6:5.2f}us, length: {working_length})")
+            self.delay  = working_delay
+            self.length = working_length
+        else:
+            print("failed, switching to --safe mode.")
+            self.delay       = 0
+            self.length      = 64
+            self.outstanding = 0
 
     def upload(self, filename, address):
         f = open(filename, "rb")
@@ -371,7 +433,16 @@ class LiteXTerm:
         length = f.tell()
         f.seek(0, 0)
 
-        print(f"[LXTERM] Uploading {filename} to 0x{address:08x} ({length} bytes)...")
+        print(f"[LITEX-TERM] Uploading {filename} to 0x{address:08x} ({length} bytes)...")
+
+        # Upload calibration
+        if not self.safe:
+            self.upload_calibration(address)
+            # Force safe mode settings when calibration fails.
+            if self.delay is None:
+                self.delay       = 0
+                self.length      = 64
+                self.outstanding = 0
 
         # Prepare parameters
         current_address = address
@@ -388,11 +459,11 @@ class LiteXTerm:
             sys.stdout.flush()
 
             # Send frame if max outstanding not reached.
-            if outstanding <= sfl_outstanding:
+            if outstanding <= self.outstanding:
                 # Prepare frame.
                 frame      = SFLFrame()
                 frame.cmd  = sfl_cmd_load
-                frame_data = f.read(min(remaining, self.payload_length-4))
+                frame_data = f.read(min(remaining, self.length-4))
                 frame.payload = current_address.to_bytes(4, "big")
                 frame.payload += frame_data
 
@@ -422,12 +493,12 @@ class LiteXTerm:
         # Compute speed.
         end     = time.time()
         elapsed = end - start
-        print("[LXTERM] Upload complete ({0:.1f}KB/s).".format(length/(elapsed*1024)))
+        print("[LITEX-TERM] Upload complete ({0:.1f}KB/s).".format(length/(elapsed*1024)))
         f.close()
         return length
 
     def boot(self):
-        print("[LXTERM] Booting the device.")
+        print("[LITEX-TERM] Booting the device.")
         frame = SFLFrame()
         frame.cmd = sfl_cmd_jump
         frame.payload = int(self.boot_address, 16).to_bytes(4, "big")
@@ -441,7 +512,7 @@ class LiteXTerm:
             return False
 
     def answer_prompt(self):
-        print("[LXTERM] Received serial boot prompt from the device.")
+        print("[LITEX-TERM] Received serial boot prompt from the device.")
         self.port.write(sfl_prompt_ack)
 
     def detect_magic(self, data):
@@ -452,13 +523,13 @@ class LiteXTerm:
             return False
 
     def answer_magic(self):
-        print("[LXTERM] Received firmware download request from the device.")
+        print("[LITEX-TERM] Received firmware download request from the device.")
         if(len(self.mem_regions)):
             self.port.write(sfl_magic_ack)
         for filename, base in self.mem_regions.items():
             self.upload(filename, int(base, 16))
         self.boot()
-        print("[LXTERM] Done.")
+        print("[LITEX-TERM] Done.")
 
     def reader(self):
         try:
@@ -532,42 +603,41 @@ class LiteXTerm:
 # Run ----------------------------------------------------------------------------------------------
 
 def _get_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("port",                                              help="Serial port (eg /dev/tty*, bridge, jtag)")
-    parser.add_argument("--speed",       default=115200,                     help="Serial baudrate")
-    parser.add_argument("--serial-boot", default=False, action='store_true', help="Automatically initiate serial boot")
-    parser.add_argument("--kernel",      default=None,                       help="Kernel image")
-    parser.add_argument("--kernel-adr",  default="0x40000000",               help="Kernel address")
-    parser.add_argument("--images",      default=None,                       help="JSON description of the images to load to memory")
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument("port",                                               help="Serial port (eg /dev/tty*, crossover, jtag).")
+    parser.add_argument("--speed",        default=115200,                     help="Serial baudrate.")
+    parser.add_argument("--serial-boot",  default=False, action='store_true', help="Automatically initiate serial boot.")
+    parser.add_argument("--kernel",       default=None,                       help="Kernel image.")
+    parser.add_argument("--kernel-adr",   default="0x40000000",               help="Kernel address.")
+    parser.add_argument("--images",       default=None,                       help="JSON description of the images to load to memory.")
+    parser.add_argument("--safe",         action="store_true",                help="Safe serial boot mode, disable upload speed optimizations.")
 
-    parser.add_argument("--bridge-name", default="uart_xover",               help="Bridge UART name to use (present in design/csr.csv)")
+    parser.add_argument("--csr-csv",        default=None,                       help="SoC CSV file.")
+    parser.add_argument("--base-address",   default=None,                       help="CSR base address.")
+    parser.add_argument("--crossover-name", default="uart_xover",               help="Crossover UART name to use (present in design/csr.csv).")
 
-    parser.add_argument("--jtag-name",   default="jtag_uart",                help="JTAG UART type: jtag_uart (default), jtag_atlantic")
-    parser.add_argument("--jtag-config", default="openocd_xc7_ft2232.cfg",   help="OpenOCD JTAG configuration file for jtag_uart")
-    parser.add_argument("--jtag-chain",  default=1,                          help="JTAG chain.")
+    parser.add_argument("--jtag-name",    default="jtag_uart",                help="JTAG UART type (jtag_uart).")
+    parser.add_argument("--jtag-config",  default="openocd_xc7_ft2232.cfg",   help="OpenOCD JTAG configuration file for jtag_uart.")
+    parser.add_argument("--jtag-chain",   default=1,                          help="JTAG chain.")
     return parser.parse_args()
 
 def main():
     args = _get_args()
-    term = LiteXTerm(args.serial_boot, args.kernel, args.kernel_adr, args.images)
+    term = LiteXTerm(args.serial_boot, args.kernel, args.kernel_adr, args.images, args.safe)
 
     if sys.platform == "win32":
-        if args.port in ["bridge", "jtag"]:
+        if args.port in ["crossover", "jtag"]:
             raise NotImplementedError
-    if args.port in ["bridge", "crossover"]: # FIXME: 2021-02-18, crossover for retro-compatibility remove and update targets?
-        bridge = BridgeUART(name=args.bridge_name)
-        bridge.open()
-        port = os.ttyname(bridge.name)
+    if args.port in ["crossover"]:
+        base_address = None if args.base_address is None else int(args.base_address)
+        xover = CrossoverUART(base_address=base_address, csr_csv=args.csr_csv, name=args.crossover_name)
+        xover.open()
+        port = os.ttyname(xover.name)
     elif args.port in ["jtag"]:
-        if args.jtag_name == "jtag_atlantic":
-            term.port = Nios2Terminal()
-            port = args.port
-            term.payload_length = 128
-            term.delay          = 1e-6
-        elif args.jtag_name == "jtag_uart":
-            bridge = JTAGUART(config=args.jtag_config, chain=int(args.jtag_chain))
-            bridge.open()
-            port = os.ttyname(bridge.name)
+        if args.jtag_name == "jtag_uart":
+            jtag_uart = JTAGUART(config=args.jtag_config, chain=int(args.jtag_chain))
+            jtag_uart.open()
+            port = os.ttyname(jtag_uart.name)
         else:
             raise NotImplementedError
     else:

@@ -17,13 +17,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <console.h>
 #include <string.h>
-#include <uart.h>
 #include <system.h>
-#include <id.h>
 #include <irq.h>
-#include <crc.h>
 
 #include "boot.h"
 #include "readline.h"
@@ -35,7 +31,12 @@
 #include <generated/mem.h>
 #include <generated/git.h>
 
-#include <spiflash.h>
+#include <libbase/console.h>
+#include <libbase/crc.h>
+
+#include <libbase/spiflash.h>
+#include <libbase/uart.h>
+#include <libbase/i2c.h>
 
 #include <liblitedram/sdram.h>
 
@@ -74,7 +75,7 @@ static void boot_sequence(void)
 	printf("No boot medium found\n");
 }
 
-int main(int i, char **c)
+__attribute__((__used__)) int main(int i, char **c)
 {
 	char buffer[CMD_LINE_BUFFER_SIZE];
 	char *params[MAX_PARAM];
@@ -91,6 +92,10 @@ int main(int i, char **c)
 	uart_init();
 #endif
 
+#ifdef CONFIG_HAS_I2C
+	i2c_send_init_cmds();
+#endif
+
 #ifndef CONFIG_SIM_DISABLE_BIOS_PROMPT
 	printf("\n");
 	printf("\e[1m        __   _ __      _  __\e[0m\n");
@@ -99,7 +104,7 @@ int main(int i, char **c)
 	printf("\e[1m     /____/_/\\__/\\__/_/|_|\e[0m\n");
 	printf("\e[1m   Build your hardware, easily!\e[0m\n");
 	printf("\n");
-	printf(" (c) Copyright 2012-2021 Enjoy-Digital\n");
+	printf(" (c) Copyright 2012-2022 Enjoy-Digital\n");
 	printf(" (c) Copyright 2007-2015 M-Labs\n");
 	printf("\n");
 #ifdef CONFIG_WITH_BUILD_TIME

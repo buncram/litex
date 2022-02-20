@@ -108,9 +108,12 @@ class SymbiflowToolchain:
             try:
                 self.symbiflow_device = {
                     # FIXME: fine for now since only a few devices are supported, do more clever device re-mapping.
+                    "xc7a35tcpg236-1"   : "xc7a50t_test",
                     "xc7a35ticsg324-1L" : "xc7a50t_test",
-                    "xc7a100tcsg324-1" : "xc7a100t_test",
+                    "xc7a100tcsg324-1"  : "xc7a100t_test",
                     "xc7a200t-sbg484-1" : "xc7a200t_test",
+                    "xc7z010clg400-1"   : "xc7z010_test",
+                    "xc7z020clg400-1"   : "xc7z020_test",
                 }[platform.device]
             except KeyError:
                 raise ValueError(f"symbiflow_device is not specified")
@@ -120,14 +123,17 @@ class SymbiflowToolchain:
                 # available bitstream_devices: artix7, kintex7, zynq7
                 self.bitstream_device = {
                     "xc7a": "artix7", # xc7a35t, xc7a50t, xc7a100t, xc7a200t
+                    "xc7z": "zynq7",  # xc7z010, xc7z020
                 }[platform.device[:4]]
             except KeyError:
                 raise ValueError(f"Unsupported device: {platform.device}")
         # FIXME: prjxray-db doesn't have xc7a35ticsg324-1L - use closest replacement
         self._partname = {
             "xc7a35ticsg324-1L" : "xc7a35tcsg324-1",
-            "xc7a100tcsg324-1" : "xc7a100tcsg324-1",
+            "xc7a100tcsg324-1"  : "xc7a100tcsg324-1",
             "xc7a200t-sbg484-1" : "xc7a200tsbg484-1",
+            "xc7z010clg400-1"   : "xc7z010clg400-1",
+            "xc7z020clg400-1"   : "xc7z020clg400-1",
         }.get(platform.device, platform.device)
 
     def _generate_makefile(self, platform, build_name):
@@ -156,7 +162,8 @@ class SymbiflowToolchain:
             Rule("$(TOP).eblif", ["$(VERILOG)", "$(MEM_INIT)", "$(XDC)"], commands=[
                     "symbiflow_synth -t $(TOP) -v $(VERILOG) -d $(BITSTREAM_DEVICE) -p $(PARTNAME) -x $(XDC) > /dev/null"
                 ]),
-            Rule("$(TOP).net", ["$(TOP).eblif", "$(SDC)"], commands=[
+            #Rule("$(TOP).net", ["$(TOP).eblif", "$(SDC)"], commands=[ #SDC conflicts with make -j2 and seems not needed
+            Rule("$(TOP).net", ["$(TOP).eblif"], commands=[
                     "symbiflow_pack -e $(TOP).eblif -d $(DEVICE) -s $(SDC) > /dev/null"
                 ]),
             Rule("$(TOP).place", ["$(TOP).net"], commands=[

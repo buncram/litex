@@ -264,12 +264,12 @@ uint8_t spisdcard_init(void) {
 
 static DSTATUS spisdcardstatus = STA_NOINIT;
 
-DSTATUS disk_status(uint8_t drv) {
+static DSTATUS spisd_disk_status(BYTE drv) {
     if (drv) return STA_NOINIT;
     return spisdcardstatus;
 }
 
-DSTATUS disk_initialize(uint8_t drv) {
+static DSTATUS spisd_disk_initialize(BYTE drv) {
     if (drv) return STA_NOINIT;
     if (spisdcardstatus) {
         spisdcardstatus = spisdcard_init() ? 0 : STA_NOINIT;
@@ -278,13 +278,13 @@ DSTATUS disk_initialize(uint8_t drv) {
     return spisdcardstatus;
 }
 
-DRESULT disk_read(uint8_t drv, uint8_t *buf, uint32_t sector, uint32_t count) {
+static DRESULT spisd_disk_read(BYTE drv, BYTE *buf, LBA_t block, UINT count) {
     uint8_t cmd;
     if (count > 1)
         cmd = CMD18; /* READ_MULTIPLE_BLOCK */
     else
         cmd = CMD17; /* READ_SINGLE_BLOCK */
-    if (spisdcardsend_cmd(cmd, sector) == 0) {
+    if (spisdcardsend_cmd(cmd, block) == 0) {
         while(count > 0) {
             if (spisdcardreceive_block(buf) == 0)
                 break;
@@ -300,6 +300,16 @@ DRESULT disk_read(uint8_t drv, uint8_t *buf, uint32_t sector, uint32_t count) {
         return RES_ERROR;
 
     return RES_OK;
+}
+
+static DISKOPS SpiSdDiskOps = {
+	.disk_initialize = spisd_disk_initialize,
+	.disk_status = spisd_disk_status,
+	.disk_read = spisd_disk_read,
+};
+
+void fatfs_set_ops_spisdcard(void) {
+	FfDiskOps = &SpiSdDiskOps;
 }
 
 #endif

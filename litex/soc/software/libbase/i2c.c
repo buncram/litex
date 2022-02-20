@@ -1,11 +1,24 @@
 // This file is Copyright (c) 2020 Antmicro <www.antmicro.com>
-#include <i2c.h>
+// This file is Copyright (c) 2022 Franck Jullien <franck.jullien@collshade.fr>
+#include "i2c.h"
+
+#include <stdio.h>
+
+#include <generated/soc.h>
 #include <generated/csr.h>
 
-#ifdef CSR_I2C_BASE
+#ifdef CONFIG_HAS_I2C
+#include <generated/i2c.h>
 
 #define I2C_PERIOD_CYCLES (CONFIG_CLOCK_FREQUENCY / I2C_FREQ_HZ)
 #define I2C_DELAY(n)	  cdelay((n)*I2C_PERIOD_CYCLES/4)
+
+int current_i2c_dev = DEFAULT_I2C_DEV;
+
+struct i2c_dev *get_i2c_devs(void) { return &i2c_devs; }
+int get_i2c_devs_count(void)       { return I2C_DEVS_COUNT; }
+void set_i2c_active_dev(int dev)   { current_i2c_dev = dev; }
+int get_i2c_active_dev(void)       { return current_i2c_dev; }
 
 static inline void cdelay(int i)
 {
@@ -15,12 +28,51 @@ static inline void cdelay(int i)
 	}
 }
 
+int i2c_send_init_cmds(void)
+{
+#ifdef I2C_INIT
+	struct i2c_cmds *i2c_cmd;
+	int dev, i, len;
+	uint8_t data[2];
+	uint8_t addr;
+
+	for (dev = 0; dev < I2C_INIT_CNT; dev++) {
+		i2c_cmd = &i2c_init[dev];
+		current_i2c_dev = i2c_cmd->dev;
+
+		for (i = 0; i < i2c_cmd->nb_cmds; i++) {
+
+			if (i2c_cmd->addr_len == 2) {
+				len     = 2;
+				addr    = (i2c_cmd->init_table[i*2] >> 8) & 0xff;
+				data[0] = i2c_cmd->init_table[i*2] & 0xff;
+				data[1] = i2c_cmd->init_table[(i*2) + 1] & 0xff;
+			} else {
+				len     = 1;
+				addr    = i2c_cmd->init_table[i*2] & 0xff;
+				data[0] = i2c_cmd->init_table[(i*2) + 1] & 0xff;
+			}
+
+			if (!i2c_write(i2c_cmd->i2c_addr, addr, data, len))
+				printf("Error during write at address 0x%04x on i2c dev %d\n",
+						addr, current_i2c_dev);
+		}
+	}
+
+	current_i2c_dev = DEFAULT_I2C_DEV;
+#endif
+
+	return 0;
+}
+
 static inline void i2c_oe_scl_sda(bool oe, bool scl, bool sda)
 {
-	i2c_w_write(
-		((oe & 1)  << CSR_I2C_W_OE_OFFSET)	|
-		((scl & 1) << CSR_I2C_W_SCL_OFFSET) |
-		((sda & 1) << CSR_I2C_W_SDA_OFFSET)
+	struct i2c_ops ops = i2c_devs[current_i2c_dev].ops;
+
+	ops.write(
+		((oe & 1)  << ops.w_oe_offset)	|
+		((scl & 1) << ops.w_scl_offset) |
+		((sda & 1) << ops.w_sda_offset)
 	);
 }
 
@@ -68,7 +120,7 @@ static int i2c_receive_bit(void)
 	i2c_oe_scl_sda(0, 1, 0);
 	I2C_DELAY(1);
 	// read in the middle of SCL high
-	value = i2c_r_read() & 1;
+	value = i2c_devs[current_i2c_dev].ops.read() & 1;
 	I2C_DELAY(1);
 	i2c_oe_scl_sda(0, 0, 0);
 	I2C_DELAY(1);
@@ -215,4 +267,4 @@ bool i2c_poll(unsigned char slave_addr)
     return result;
 }
 
-#endif /* CSR_I2C_BASE */
+#endif /* CONFIG_HAS_I2C */

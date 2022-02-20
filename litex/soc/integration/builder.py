@@ -13,6 +13,7 @@
 
 
 import os
+import argparse
 import subprocess
 import struct
 import shutil
@@ -20,6 +21,7 @@ import shutil
 from litex import get_data_mod
 from litex.build.tools import write_to_file
 from litex.soc.integration import export, soc_core
+from litex.soc.integration.soc import colorer
 from litex.soc.cores import cpu
 
 # Helpers ------------------------------------------------------------------------------------------
@@ -36,6 +38,9 @@ def _create_dir(d, remove_if_exists=False):
 # Software Packages --------------------------------------------------------------------------------
 
 soc_software_packages = [
+    # picolibc
+    "libc",
+
     # Compiler-RT.
     "libcompiler_rt",
 
@@ -111,9 +116,6 @@ class Builder:
 
         for name in soc_software_packages:
             self.add_software_package(name)
-
-            if name == "libbase":
-                name += "-nofloat"
             self.add_software_library(name)
 
     def add_software_package(self, name, src_dir=None):
@@ -125,29 +127,37 @@ class Builder:
         self.software_libraries.append(name)
 
     def _get_variables_contents(self):
+        # Helper.
         variables_contents = []
         def define(k, v):
-            variables_contents.append("{}={}".format(k, _makefile_escape(v)))
+            try:
+                variables_contents.append("{}={}".format(k, _makefile_escape(v)))
+            except AttributeError as e:
+                print(colorer(f"problem with {k}:", 'red'))
+                raise e
 
         # Define packages and libraries.
-        define("PACKAGES", " ".join(name for name, src_dir in self.software_packages))
+        define("PACKAGES",     " ".join(name for name, src_dir in self.software_packages))
         define("PACKAGE_DIRS", " ".join(src_dir for name, src_dir in self.software_packages))
-        define("LIBS", " ".join(self.software_libraries))
+        define("LIBS",         " ".join(self.software_libraries))
 
-        # Define the CPU variables.
+        # Define CPU variables.
         for k, v in export.get_cpu_mak(self.soc.cpu, self.compile_software):
             define(k, v)
 
-        # Define the SoC/Compiler-RT/Software/Include directories.
-        define("SOC_DIRECTORY", soc_directory)
+        # Define SoC/Picolibc/Compiler-RT/Software/Include directories.
+        picolibc_directory    = get_data_mod("software", "picolibc").data_location
         compiler_rt_directory = get_data_mod("software", "compiler_rt").data_location
+
+        define("SOC_DIRECTORY",         soc_directory)
+        define("PICOLIBC_DIRECTORY",    picolibc_directory)
         define("COMPILER_RT_DIRECTORY", compiler_rt_directory)
         variables_contents.append("export BUILDINC_DIRECTORY")
         define("BUILDINC_DIRECTORY", self.include_dir)
         for name, src_dir in self.software_packages:
             define(name.upper() + "_DIRECTORY", src_dir)
 
-        # Define the BIOS Options.
+        # Define BIOS Options.
         for bios_option in self.bios_options:
             assert bios_option in ["TERM_NO_HIST", "TERM_MINI", "TERM_NO_COMPLETE"]
             define(bios_option, "1")
@@ -172,6 +182,13 @@ class Builder:
             # Generate Memory Regions to regions.ld.
             regions_contents = export.get_linker_regions(self.soc.mem_regions)
             write_to_file(os.path.join(self.generated_dir, "regions.ld"), regions_contents)
+
+        # Collect / Generate I2C config and init table.
+        from litex.soc.cores.bitbang import collect_i2c_info
+        i2c_devs, i2c_init = collect_i2c_info(self.soc)
+        if i2c_devs:
+            i2c_info = export.get_i2c_header((i2c_devs, i2c_init))
+            write_to_file(os.path.join(self.generated_dir, "i2c.h"), i2c_info)
 
         # Generate Memory Regions to mem.h.
         mem_contents = export.get_mem_header(self.soc.mem_regions)
@@ -227,6 +244,19 @@ class Builder:
             csr_svd_contents = export.get_csr_svd(self.soc)
             write_to_file(os.path.realpath(self.csr_svd), csr_svd_contents)
 
+    def _check_meson(self):
+        # Check Meson install/version.
+        meson_present   = (shutil.which("meson") is not None)
+        meson_version   = [0, 0, 0]
+        meson_major_min = 0
+        meson_minor_min = 59
+        if meson_present:
+            meson_version = subprocess.check_output(["meson", "-v"]).decode("utf-8").split(".")
+        if (not meson_present) or (int(meson_version[0]) < meson_major_min) or (int(meson_version[1]) < meson_minor_min):
+            msg = "Unable to find valid Meson build system, please install it with:\n"
+            msg += "- pip3 install meson.\n"
+            raise OSError(msg)
+
     def _prepare_rom_software(self):
         # Create directories for all software packages.
         for name, src_dir in self.software_packages:
@@ -235,6 +265,7 @@ class Builder:
     def _generate_rom_software(self, compile_bios=True):
         # Compile all software packages.
          for name, src_dir in self.software_packages:
+
             # Skip BIOS compilation when disabled.
             if name == "bios" and not compile_bios:
                 continue
@@ -257,22 +288,30 @@ class Builder:
         self.soc.platform.output_dir = self.output_dir
 
         # Check if BIOS is used and add software package if so.
-        with_bios = self.soc.cpu_type not in [None, "zynq7000"]
+        with_bios = self.soc.cpu_type is not None
         if with_bios:
             self.add_software_package("bios")
 
         # Create Gateware directory.
         _create_dir(self.gateware_dir)
 
+        # Copy Sources to Gateware directory (Optional).
+        for i, (f, language, library, *copy) in enumerate(self.soc.platform.sources):
+            if len(copy) and copy[0]:
+                shutil.copy(f, self.gateware_dir)
+                f = os.path.basename(f)
+            self.soc.platform.sources[i] = (f, language, library)
+
         # Create Software directory.
         # First check if software needs a full re-build and remove software dir if so.
-        software_full_rebuild  = False
-        software_variables_mak = os.path.join(self.generated_dir, "variables.mak")
-        if os.path.exists(software_variables_mak):
-            old_variables_contents = open(software_variables_mak).read()
-            new_variables_contents = self._get_variables_contents()
-            software_full_rebuild  = (old_variables_contents != new_variables_contents)
-        _create_dir(self.software_dir, remove_if_exists=software_full_rebuild)
+        if with_bios:
+            software_full_rebuild  = False
+            software_variables_mak = os.path.join(self.generated_dir, "variables.mak")
+            if self.compile_software and os.path.exists(software_variables_mak):
+                old_variables_contents = open(software_variables_mak).read()
+                new_variables_contents = self._get_variables_contents()
+                software_full_rebuild  = (old_variables_contents != new_variables_contents)
+            _create_dir(self.software_dir, remove_if_exists=software_full_rebuild)
 
         # Finalize the SoC.
         self.soc.finalize()
@@ -295,6 +334,7 @@ class Builder:
                 )
                 if use_bios:
                     self.soc.check_bios_requirements()
+                    self._check_meson()
                 self._prepare_rom_software()
                 self._generate_rom_software(compile_bios=use_bios)
 
@@ -322,18 +362,20 @@ class Builder:
 # Builder Arguments --------------------------------------------------------------------------------
 
 def builder_args(parser):
-    parser.add_argument("--output-dir",          default=None,        help="Base Output directory (customizable with --{gateware,software,include,generated}-dir).")
-    parser.add_argument("--gateware-dir",        default=None,        help="Output directory for Gateware files.")
-    parser.add_argument("--software-dir",        default=None,        help="Output directory for Software files.")
-    parser.add_argument("--include-dir",         default=None,        help="Output directory for Header files.")
-    parser.add_argument("--generated-dir",       default=None,        help="Output directory for Generated files.")
-    parser.add_argument("--no-compile-software", action="store_true", help="Disable Software compilation.")
-    parser.add_argument("--no-compile-gateware", action="store_true", help="Disable Gateware compilation.")
-    parser.add_argument("--csr-csv",             default=None,        help="Write SoC mapping to the specified CSV file.")
-    parser.add_argument("--csr-json",            default=None,        help="Write SoC mapping to the specified JSON file.")
-    parser.add_argument("--csr-svd",             default=None,        help="Write SoC mapping to the specified SVD file.")
-    parser.add_argument("--memory-x",            default=None,        help="Write SoC Memory Regions to the specified Memory-X file.")
-    parser.add_argument("--doc",                 action="store_true", help="Generate SoC Documentation.")
+    parser.formatter_class = lambda prog: argparse.ArgumentDefaultsHelpFormatter(prog, max_help_position=10, width=120)
+    builder_group = parser.add_argument_group("builder")
+    builder_group.add_argument("--output-dir",          default=None,        help="Base Output directory.")
+    builder_group.add_argument("--gateware-dir",        default=None,        help="Output directory for Gateware files.")
+    builder_group.add_argument("--software-dir",        default=None,        help="Output directory for Software files.")
+    builder_group.add_argument("--include-dir",         default=None,        help="Output directory for Header files.")
+    builder_group.add_argument("--generated-dir",       default=None,        help="Output directory for Generated files.")
+    builder_group.add_argument("--no-compile-software", action="store_true", help="Disable Software compilation.")
+    builder_group.add_argument("--no-compile-gateware", action="store_true", help="Disable Gateware compilation.")
+    builder_group.add_argument("--csr-csv",             default=None,        help="Write SoC mapping to the specified CSV file.")
+    builder_group.add_argument("--csr-json",            default=None,        help="Write SoC mapping to the specified JSON file.")
+    builder_group.add_argument("--csr-svd",             default=None,        help="Write SoC mapping to the specified SVD file.")
+    builder_group.add_argument("--memory-x",            default=None,        help="Write SoC Memory Regions to the specified Memory-X file.")
+    builder_group.add_argument("--doc",                 action="store_true", help="Generate SoC Documentation.")
 
 
 def builder_argdict(args):

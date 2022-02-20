@@ -24,15 +24,15 @@ class SimPlatform(GenericPlatform):
         if toolchain == "verilator":
             self.toolchain = verilator.SimVerilatorToolchain()
         else:
-            raise ValueError("Unknown toolchain")
+            raise ValueError(f"Unknown toolchain {toolchain}")
         # we must always request the sim_trace signal
         self.trace = self.request("sim_trace")
 
-    def request(self, name, number=None):
+    def request(self, name, number=None, loose=False):
         index = ""
         if number is not None:
             index = str(number)
-        obj = GenericPlatform.request(self, name, number=number)
+        obj = GenericPlatform.request(self, name, number=number, loose=loose)
         siglist = []
         if isinstance(obj, Signal):
             siglist.append((name, obj.nbits, name))

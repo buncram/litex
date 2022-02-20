@@ -52,9 +52,10 @@ GCC_FLAGS = {
     "sim":      "-march=rv64imafd -mabi=lp64d ",
 }
 
-# BlackParrotRV64 ----------------------------------------------------------------------------------
+# BlackParrot --------------------------------------------------------------------------------------
 
-class BlackParrotRV64(CPU):
+class BlackParrot(CPU):
+    family               = "riscv"
     name                 = "blackparrot"
     human_name           = "BlackParrotRV64[imafd]"
     variants             = CPU_VARIANTS
@@ -138,7 +139,6 @@ class BlackParrotRV64(CPU):
 
 
     def set_reset_address(self, reset_address):
-        assert not hasattr(self, "reset_address")
         self.reset_address = reset_address
         assert reset_address == 0x70000000, "cpu_reset_addr hardcoded to 7x00000000!"
 

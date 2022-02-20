@@ -98,6 +98,7 @@ class OBI2Wishbone(Module):
 # Ibex ---------------------------------------------------------------------------------------------
 
 class Ibex(CPU):
+    family               = "riscv"
     name                 = "ibex"
     human_name           = "Ibex"
     variants             = CPU_VARIANTS
@@ -123,6 +124,7 @@ class Ibex(CPU):
         self.dbus         = wishbone.Interface()
         self.periph_buses = [self.ibus, self.dbus]
         self.memory_buses = []
+        self.interrupt    = Signal(15)
 
         ibus = Record(obi_layout)
         dbus = Record(obi_layout)
@@ -169,7 +171,7 @@ class Ibex(CPU):
             i_irq_software_i = 0,
             i_irq_timer_i    = 0,
             i_irq_external_i = 0,
-            i_irq_fast_i     = 0,
+            i_irq_fast_i     = self.interrupt,
             i_irq_nm_i       = 0,
 
             # Debug.
@@ -187,8 +189,20 @@ class Ibex(CPU):
 
     @staticmethod
     def add_sources(platform):
-        opentitandir = get_data_mod("misc", "opentitan").data_location
-        ibexdir      = os.path.join(os.path.join(opentitandir, "hw", "vendor", "lowrisc_ibex"))
+        ibexdir = get_data_mod("cpu", "ibex").data_location
+        platform.add_verilog_include_path(os.path.join(ibexdir, "rtl"))
+        platform.add_verilog_include_path(os.path.join(ibexdir,
+            "vendor", "lowrisc_ip", "dv", "sv", "dv_utils")
+        )
+        platform.add_verilog_include_path(os.path.join(ibexdir,
+            "vendor", "lowrisc_ip", "ip", "prim", "rtl")
+        )
+        platform.add_source(os.path.join(ibexdir, "syn", "rtl", "prim_clock_gating.v"))
+        platform.add_sources(os.path.join(ibexdir, "vendor", "lowrisc_ip", "ip", "prim", "rtl"),
+            "prim_alert_pkg.sv",
+            "prim_assert.sv",
+            "prim_ram_1p_pkg.sv",
+        )
         platform.add_sources(os.path.join(ibexdir, "rtl"),
             "ibex_pkg.sv",
             "ibex_alu.sv",
@@ -209,20 +223,13 @@ class Ibex(CPU):
             "ibex_register_file_fpga.sv",
             "ibex_wb_stage.sv",
             "ibex_core.sv",
+            "ibex_top.sv"
         )
-        platform.add_source(os.path.join(ibexdir, "syn", "rtl", "prim_clock_gating.v"))
-        platform.add_sources(os.path.join(opentitandir, "hw", "ip", "prim", "rtl"),
-            "prim_alert_pkg.sv",
-            "prim_assert.sv"
-        )
-        platform.add_verilog_include_path(os.path.join(opentitandir, "hw", "ip", "prim", "rtl"))
-        platform.add_verilog_include_path(os.path.join(ibexdir, "dv", "fcov"))
 
     def set_reset_address(self, reset_address):
-        assert not hasattr(self, "reset_address")
         self.reset_address = reset_address
         self.cpu_params.update(i_boot_addr_i=Signal(32, reset=reset_address))
 
     def do_finalize(self):
         assert hasattr(self, "reset_address")
-        self.specials += Instance("ibex_core", **self.cpu_params)
+        self.specials += Instance("ibex_top", **self.cpu_params)

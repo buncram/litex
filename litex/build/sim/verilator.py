@@ -105,7 +105,7 @@ extern "C" void litex_sim_init(void **out)
     tools.write_to_file("sim_init.cpp", content)
 
 
-def _generate_sim_variables(include_paths):
+def _generate_sim_variables(include_paths, extra_mods, extra_mods_path):
     tapcfg_dir = get_data_mod("misc", "tapcfg").data_location
     include = ""
     for path in include_paths:
@@ -115,6 +115,13 @@ SRC_DIR = {}
 INC_DIR = {}
 TAPCFG_DIRECTORY = {}
 """.format(core_directory, include, tapcfg_dir)
+
+    if extra_mods:
+        modlist = " ".join(extra_mods)
+        content += "EXTRA_MOD_LIST = " + modlist + "\n"
+        content += "EXTRA_MOD_BASE_DIR = " + extra_mods_path + "\n"
+        tools.write_to_file(extra_mods_path + "/variables.mak", content)
+
     tools.write_to_file("variables.mak", content)
 
 
@@ -175,22 +182,25 @@ def _run_sim(build_name, as_root=False, interactive=True):
 
 class SimVerilatorToolchain:
     def build(self, platform, fragment,
-            build_dir    = "build",
-            build_name   = "sim",
-            serial       = "console",
-            build        = True,
-            run          = True,
-            threads      = 1,
-            verbose      = True,
-            sim_config   = None,
-            coverage     = False,
-            opt_level    = "O0",
-            trace        = False,
-            trace_fst    = False,
-            trace_start  = 0,
-            trace_end    = -1,
-            regular_comb = False,
-            interactive  = True):
+            build_dir        = "build",
+            build_name       = "sim",
+            serial           = "console",
+            build            = True,
+            run              = True,
+            threads          = 1,
+            verbose          = True,
+            sim_config       = None,
+            coverage         = False,
+            opt_level        = "O0",
+            trace            = False,
+            trace_fst        = False,
+            trace_start      = 0,
+            trace_end        = -1,
+            regular_comb     = False,
+            interactive      = True,
+            pre_run_callback = None,
+            extra_mods       = None,
+            extra_mods_path  = ""):
 
         # Create build directory
         os.makedirs(build_dir, exist_ok=True)
@@ -205,10 +215,9 @@ class SimVerilatorToolchain:
 
             # Generate verilog
             v_output = platform.get_verilog(fragment,
-                name            = build_name,
-                dummy_signal    = False,
-                regular_comb    = regular_comb,
-                blocking_assign = True)
+                name         = build_name,
+                regular_comb = regular_comb
+            )
             named_sc, named_pc = platform.resolve_signals(v_output.ns)
             v_file = build_name + ".v"
             v_output.write(v_file)
@@ -217,7 +226,10 @@ class SimVerilatorToolchain:
             # Generate cpp header/main/variables
             _generate_sim_h(platform)
             _generate_sim_cpp(platform, trace, trace_start, trace_end)
-            _generate_sim_variables(platform.verilog_include_paths)
+
+            _generate_sim_variables(platform.verilog_include_paths,
+                                    extra_mods,
+                                    extra_mods_path)
 
             # Generate sim config
             if sim_config:
@@ -228,6 +240,8 @@ class SimVerilatorToolchain:
 
         # Run
         if run:
+            if pre_run_callback is not None:
+                pre_run_callback(v_output.ns)
             if which("verilator") is None:
                 msg = "Unable to find Verilator toolchain, please either:\n"
                 msg += "- Install Verilator.\n"
@@ -235,9 +249,9 @@ class SimVerilatorToolchain:
                 raise OSError(msg)
             _compile_sim(build_name, verbose)
             run_as_root = False
-            if sim_config.has_module("ethernet"):
-                run_as_root = True
-            if sim_config.has_module("xgmii_ethernet"):
+            if sim_config.has_module("ethernet") \
+               or sim_config.has_module("xgmii_ethernet") \
+               or sim_config.has_module("gmii_ethernet"):
                 run_as_root = True
             _run_sim(build_name, as_root=run_as_root, interactive=interactive)
 
@@ -245,3 +259,22 @@ class SimVerilatorToolchain:
 
         if build:
             return v_output.ns
+
+def verilator_build_args(parser):
+    toolchain_group = parser.add_argument_group("toolchain")
+    toolchain_group.add_argument("--threads",      default=1,           help="Set number of threads.")
+    toolchain_group.add_argument("--trace",        action="store_true", help="Enable Tracing.")
+    toolchain_group.add_argument("--trace-fst",    action="store_true", help="Enable FST tracing.")
+    toolchain_group.add_argument("--trace-start",  default="0",         help="Time to start tracing (ps).")
+    toolchain_group.add_argument("--trace-end",    default="-1",        help="Time to end tracing (ps).")
+    toolchain_group.add_argument("--opt-level",    default="O3",        help="Compilation optimization level.")
+
+def verilator_build_argdict(args):
+    return {
+        "threads"     : args.threads,
+        "trace"       : args.trace,
+        "trace_fst"   : args.trace_fst,
+        "trace_start" : int(float(args.trace_start)),
+        "trace_end"   : int(float(args.trace_end)),
+        "opt_level"   : args.opt_level
+    }

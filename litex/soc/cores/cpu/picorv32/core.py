@@ -37,6 +37,7 @@ GCC_FLAGS = {
 # PicoRV32 -----------------------------------------------------------------------------------------
 
 class PicoRV32(CPU):
+    family               = "riscv"
     name                 = "picorv32"
     human_name           = "PicoRV32"
     variants             = CPU_VARIANTS
@@ -178,7 +179,6 @@ class PicoRV32(CPU):
         self.add_sources(platform)
 
     def set_reset_address(self, reset_address):
-        assert not hasattr(self, "reset_address")
         self.reset_address = reset_address
         self.cpu_params.update(
             p_PROGADDR_RESET = reset_address,

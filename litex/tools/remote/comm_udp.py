@@ -26,7 +26,7 @@ class CommUDP(CSRBuilder):
             return
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.bind(("", self.port))
-        self.socket.settimeout(1)
+        self.socket.settimeout(2)
         if probe:
             self.probe(self.server, self.port)
 
@@ -42,6 +42,7 @@ class CommUDP(CSRBuilder):
             packet = EtherbonePacket()
             packet.pf = 1
             packet.encode()
+            packet.bytes += bytes([0x00, 0x00, 0x00, 0x00]) # Add Padding as payload.
             self.socket.sendto(packet.bytes, (ip, port))
 
             # ...and get/check server's response.

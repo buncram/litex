@@ -7,7 +7,7 @@
 #include <generated/csr.h>
 #include <generated/soc.h>
 #include <irq.h>
-#include <uart.h>
+#include <libbase/uart.h>
 #include <stdio.h>
 
 #if defined(__microwatt__)
@@ -35,11 +35,11 @@ void plic_init(void)
 {
 	int i;
 
-	// priorities for interrupt pins 1..4
-	for (i = 1; i <= 4; i++)
+	// priorities for interrupt pins 1..8
+	for (i = 1; i <= 8; i++)
 		*((unsigned int *)PLIC_BASE + i) = 1;
-	// enable interrupt pins 1..4
-	*((unsigned int *)PLIC_ENABLED) = 0xf << 1;
+	// enable interrupt pins 1..8
+	*((unsigned int *)PLIC_ENABLED) = 0xff << 1;
 	// set priority threshold to 0 (any priority > 0 triggers interrupt)
 	*((unsigned int *)PLIC_THRSHLD) = 0;
 }
@@ -69,6 +69,40 @@ void isr(void)
 	}
 }
 #elif defined(__cv32e40p__)
+
+#define FIRQ_OFFSET 16
+#define IRQ_MASK 0x7FFFFFFF
+#define INVINST 2
+#define ECALL 11
+#define RISCV_TEST
+
+void isr(void)
+{
+    unsigned int cause = csrr(mcause) & IRQ_MASK;
+
+    if (csrr(mcause) & 0x80000000) {
+#ifndef UART_POLLING
+        if (cause == (UART_INTERRUPT+FIRQ_OFFSET)){
+            uart_isr();
+        }
+#endif
+    } else {
+#ifdef RISCV_TEST
+        int gp;
+        asm volatile ("mv %0, gp" : "=r"(gp));
+        printf("E %d\n", cause);
+        if (cause == INVINST) {
+            printf("Inv Instr\n");
+            for(;;);
+        }
+        if (cause == ECALL) {
+            printf("Ecall (gp: %d)\n", gp);
+            csrw(mepc, csrr(mepc)+4);
+        }
+#endif
+    }
+}
+#elif defined(__cv32e41p__)
 
 #define FIRQ_OFFSET 16
 #define IRQ_MASK 0x7FFFFFFF

@@ -25,12 +25,13 @@ CPU_VARIANTS = ["standard", "standard+ghdl", "standard+irq", "standard+ghdl+irq"
 # Microwatt ----------------------------------------------------------------------------------------
 
 class Microwatt(CPU):
+    family               = "ppc64"
     name                 = "microwatt"
     human_name           = "Microwatt"
     variants             = CPU_VARIANTS
     data_width           = 64
     endianness           = "little"
-    gcc_triple           = ("powerpc64le-linux", "powerpc64le-linux-gnu")
+    gcc_triple           = ("powerpc64le-linux", "powerpc64le-linux-gnu", "ppc64le-linux", "ppc64le-linux-musl")
     linker_output_format = "elf64-powerpcle"
     nop                  = "nop"
     io_regions           = {0xc0000000: 0x10000000} # Origin, Length.
@@ -85,7 +86,7 @@ class Microwatt(CPU):
             i_wishbone_insn_ack   = ibus.ack,
             i_wishbone_insn_stall = ibus.cyc & ~ibus.ack, # No burst support
 
-            o_wishbone_insn_adr   = Cat(Signal(3), ibus.adr),
+            o_wishbone_insn_adr   = ibus.adr,
             o_wishbone_insn_dat_w = ibus.dat_w,
             o_wishbone_insn_cyc   = ibus.cyc,
             o_wishbone_insn_stb   = ibus.stb,
@@ -97,12 +98,20 @@ class Microwatt(CPU):
             i_wishbone_data_ack   = dbus.ack,
             i_wishbone_data_stall = dbus.cyc & ~dbus.ack, # No burst support
 
-            o_wishbone_data_adr   = Cat(Signal(3), dbus.adr),
+            o_wishbone_data_adr   = dbus.adr,
             o_wishbone_data_dat_w = dbus.dat_w,
             o_wishbone_data_cyc   = dbus.cyc,
             o_wishbone_data_stb   = dbus.stb,
             o_wishbone_data_sel   = dbus.sel,
             o_wishbone_data_we    = dbus.we,
+
+            # Snoop.
+            i_wb_snoop_in_adr   = 0,
+            i_wb_snoop_in_dat_w = 0,
+            i_wb_snoop_in_cyc   = 0,
+            i_wb_snoop_in_stb   = 0,
+            i_wb_snoop_in_sel   = 0,
+            i_wb_snoop_in_we    = 0,
 
             # Debug.
             i_dmi_addr = 0,
@@ -120,7 +129,6 @@ class Microwatt(CPU):
         self.add_sources(platform, use_ghdl_yosys_plugin="ghdl" in self.variant)
 
     def set_reset_address(self, reset_address):
-        assert not hasattr(self, "reset_address")
         self.reset_address = reset_address
         assert reset_address == 0x00000000
 
@@ -146,6 +154,7 @@ class Microwatt(CPU):
             "utils.vhdl",
             "common.vhdl",
             "helpers.vhdl",
+            "nonrandom.vhdl",
 
             # Fetch.
             "fetch1.vhdl",
@@ -159,8 +168,6 @@ class Microwatt(CPU):
             # Decode.
             "insn_helpers.vhdl",
             "decode1.vhdl",
-            "gpr_hazard.vhdl",
-            "cr_hazard.vhdl",
             "control.vhdl",
             "decode2.vhdl",
 
@@ -173,15 +180,20 @@ class Microwatt(CPU):
             "ppc_fx_insns.vhdl",
             "logical.vhdl",
             "rotator.vhdl",
-            "countzero.vhdl",
+            "countbits.vhdl",
             "execute1.vhdl",
 
             # Load/Store.
             "loadstore1.vhdl",
 
-            # Multiply/Divide.
-            "multiply.vhdl",
+            # Divide.
             "divider.vhdl",
+
+            # FPU.
+            "fpu.vhdl",
+
+            # PMU.
+            "pmu.vhdl",
 
             # Writeback.
             "writeback.vhdl",
@@ -193,6 +205,12 @@ class Microwatt(CPU):
             "core_debug.vhdl",
             "core.vhdl",
         ]
+        from litex.build.xilinx import XilinxPlatform
+        if isinstance(platform, XilinxPlatform) and not use_ghdl_yosys_plugin:
+            sources.append("xilinx-mult.vhdl")
+        else:
+            sources.append("multiply.vhdl")
+
         sdir = get_data_mod("cpu", "microwatt").data_location
         cdir = os.path.dirname(__file__)
         # Convert VHDL to Verilog through GHDL/Yosys.

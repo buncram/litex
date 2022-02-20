@@ -22,23 +22,25 @@ from litex.soc.cores.cpu import CPU, CPU_GCC_TRIPLE_RISCV32
 # Variants -----------------------------------------------------------------------------------------
 
 CPU_VARIANTS = {
-    "minimal":          "VexRiscv_Min",
-    "minimal+debug":    "VexRiscv_MinDebug",
-    "lite":             "VexRiscv_Lite",
-    "lite+debug":       "VexRiscv_LiteDebug",
-    "standard":         "VexRiscv",
-    "standard+debug":   "VexRiscv_Debug",
-    "imac":             "VexRiscv_IMAC",
-    "imac+debug":       "VexRiscv_IMACDebug",
-    "full":             "VexRiscv_Full",
-    "full+cfu":         "VexRiscv_FullCfu",
-    "full+debug":       "VexRiscv_FullDebug",
-    "full+cfu+debug":   "VexRiscv_FullCfuDebug",
-    "linux":            "VexRiscv_Linux",
-    "linux+debug":      "VexRiscv_LinuxDebug",
-    "linux+no-dsp":     "VexRiscv_LinuxNoDspFmax",
-    "secure":           "VexRiscv_Secure",
-    "secure+debug":     "VexRiscv_SecureDebug",
+    "minimal":            "VexRiscv_Min",
+    "minimal+debug":      "VexRiscv_MinDebug",
+    "minimal+debug+hwbp": "VexRiscv_MinDebugHwBP",
+    "lite":               "VexRiscv_Lite",
+    "lite+debug":         "VexRiscv_LiteDebug",
+    "lite+debug+hwbp":    "VexRiscv_LiteDebugHwBP",
+    "standard":           "VexRiscv",
+    "standard+debug":     "VexRiscv_Debug",
+    "imac":               "VexRiscv_IMAC",
+    "imac+debug":         "VexRiscv_IMACDebug",
+    "full":               "VexRiscv_Full",
+    "full+cfu":           "VexRiscv_FullCfu",
+    "full+debug":         "VexRiscv_FullDebug",
+    "full+cfu+debug":     "VexRiscv_FullCfuDebug",
+    "linux":              "VexRiscv_Linux",
+    "linux+debug":        "VexRiscv_LinuxDebug",
+    "linux+no-dsp":       "VexRiscv_LinuxNoDspFmax",
+    "secure":             "VexRiscv_Secure",
+    "secure+debug":       "VexRiscv_SecureDebug",
 }
 
 # GCC Flags ----------------------------------------------------------------------------------------
@@ -93,6 +95,7 @@ class VexRiscvTimer(Module, AutoCSR):
 # VexRiscv -----------------------------------------------------------------------------------------
 
 class VexRiscv(CPU, AutoCSR):
+    family               = "riscv"
     name                 = "vexriscv"
     human_name           = "VexRiscv"
     variants             = CPU_VARIANTS
@@ -178,7 +181,6 @@ class VexRiscv(CPU, AutoCSR):
             self.add_debug()
 
     def set_reset_address(self, reset_address):
-        assert not hasattr(self, "reset_address")
         self.reset_address = reset_address
         self.cpu_params.update(i_externalResetVector=Signal(32, reset=reset_address))
 
@@ -275,7 +277,7 @@ class VexRiscv(CPU, AutoCSR):
         if not os.path.exists(cfu_filename):
             raise OSError(f"Unable to find VexRiscv CFU plugin {cfu_filename}.")
 
-        # CFU Layout.
+        # CFU:CPU Bus Layout.
         cfu_bus_layout = [
             ("cmd", [
                 ("valid", 1),
@@ -290,17 +292,16 @@ class VexRiscv(CPU, AutoCSR):
                 ("valid", 1),
                 ("ready", 1),
                 ("payload", [
-                    ("response_ok", 1),
                     ("outputs_0", 32),
                 ]),
             ]),
         ]
 
-        # CFU Bus.
+        # The CFU:CPU Bus.
         self.cfu_bus = cfu_bus = Record(cfu_bus_layout)
 
-        # Add CFU.
-        self.specials += Instance("Cfu",
+        # Connect CFU to the CFU:CPU bus.
+        self.cfu_params = dict(
             i_cmd_valid                = cfu_bus.cmd.valid,
             o_cmd_ready                = cfu_bus.cmd.ready,
             i_cmd_payload_function_id  = cfu_bus.cmd.payload.function_id,
@@ -308,14 +309,13 @@ class VexRiscv(CPU, AutoCSR):
             i_cmd_payload_inputs_1     = cfu_bus.cmd.payload.inputs_1,
             o_rsp_valid                = cfu_bus.rsp.valid,
             i_rsp_ready                = cfu_bus.rsp.ready,
-            o_rsp_payload_response_ok  = cfu_bus.rsp.payload.response_ok,
             o_rsp_payload_outputs_0    = cfu_bus.rsp.payload.outputs_0,
             i_clk                      = ClockSignal("sys"),
             i_reset                    = ResetSignal("sys"),
         )
         self.platform.add_source(cfu_filename)
 
-        # Connect CFU to CPU.
+        # Connect CPU to the CFU:CPU bus.
         self.cpu_params.update(
             o_CfuPlugin_bus_cmd_valid                = cfu_bus.cmd.valid,
             i_CfuPlugin_bus_cmd_ready                = cfu_bus.cmd.ready,
@@ -324,7 +324,6 @@ class VexRiscv(CPU, AutoCSR):
             o_CfuPlugin_bus_cmd_payload_inputs_1     = cfu_bus.cmd.payload.inputs_1,
             i_CfuPlugin_bus_rsp_valid                = cfu_bus.rsp.valid,
             o_CfuPlugin_bus_rsp_ready                = cfu_bus.rsp.ready,
-            i_CfuPlugin_bus_rsp_payload_response_ok  = cfu_bus.rsp.payload.response_ok,
             i_CfuPlugin_bus_rsp_payload_outputs_0    = cfu_bus.rsp.payload.outputs_0,
         )
 
@@ -363,3 +362,5 @@ class VexRiscv(CPU, AutoCSR):
         if not self.external_variant:
             self.add_sources(self.platform, self.variant)
         self.specials += Instance("VexRiscv", **self.cpu_params)
+        if hasattr(self, "cfu_params"):
+            self.specials += Instance("Cfu", **self.cfu_params)

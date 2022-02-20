@@ -84,12 +84,13 @@ def parse_device(device):
                  "ct256", "tq144:4k"],
         "up3k": ["sg48", "uwg30"],
         "up5k": ["sg48", "uwg30"],
+        "u4k": ["sg48"],
     }
 
     (family, architecture, package) = device.split("-")
     if family not in ["ice40"]:
         raise ValueError("Unknown device family {}".format(family))
-    if architecture not in ["lp384", "lp1k", "hx1k", "lp8k", "hx8k", "up5k"]:
+    if architecture not in packages.keys():
         raise ValueError("Invalid device architecture {}".format(architecture))
     if package not in packages[architecture]:
         raise ValueError("Invalid device package {}".format(package))
@@ -217,12 +218,10 @@ class LatticeIceStormToolchain:
         self.clocks[clk] = period
 
 def icestorm_args(parser):
-    parser.add_argument("--nextpnr-timingstrict", action="store_true",
-                        help="fail if timing not met, i.e., do NOT pass '--timing-allow-fail' to nextpnr")
-    parser.add_argument("--nextpnr-ignoreloops", action="store_true",
-                        help="ignore combinational loops in timing analysis, i.e. pass '--ignore-loops' to nextpnr")
-    parser.add_argument("--nextpnr-seed", default=1, type=int,
-                        help="seed to pass to nextpnr")
+    toolchain_group = parser.add_argument_group("toolchain")
+    toolchain_group.add_argument("--nextpnr-timingstrict", action="store_true", help="Make the build fail when Timing is not met.")
+    toolchain_group.add_argument("--nextpnr-ignoreloops",  action="store_true", help="Use strict Timing mode (Build will fail when Timings are not met).")
+    toolchain_group.add_argument("--nextpnr-seed",         default=1, type=int, help="Set Nextpnr's seed.")
 
 def icestorm_argdict(args):
     return {

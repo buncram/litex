@@ -10,9 +10,9 @@
 import sys
 import json
 import argparse
+import os
 
-
-def generate_dts(d, initrd_start=None, initrd_size=None, polling=False):
+def generate_dts(d, initrd_start=None, initrd_size=None, initrd=None, root_device=None, polling=False):
 
     kB = 1024
     mB = kB*1024
@@ -32,36 +32,57 @@ def generate_dts(d, initrd_start=None, initrd_size=None, polling=False):
 """
 
     # Boot Arguments -------------------------------------------------------------------------------
+    cpu_architectures = {
+        "mor1kx":             "or1k",
+        "marocchino":         "or1k",
+        "vexriscv smp-linux": "riscv",
+    }
     default_initrd_start = {
-        "mor1kx":               8*mB,
-        "vexriscv smp-linux" : 16*mB,
+        "or1k":   8*mB,
+        "riscv": 16*mB,
     }
     default_initrd_size = 8*mB
 
+    cpu_arch = cpu_architectures[cpu_name]
     if initrd_start is None:
-        initrd_start = default_initrd_start[cpu_name]
+        initrd_start = default_initrd_start[cpu_arch]
 
     if initrd_size is None:
         initrd_size = default_initrd_size
 
+    if initrd == "enabled" or initrd is None:
+        initrd_enabled = True
+    elif initrd == "disabled":
+        initrd_enabled = False
+    else:
+        initrd_enabled = True
+        initrd_size = os.path.getsize(initrd)
+
+    if root_device is None:
+        root_device = "ram0"
+
     dts += """
         chosen {{
-            bootargs = "mem={main_ram_size_mb}M@0x{main_ram_base:x} rootwait console=liteuart earlycon=sbi root=/dev/ram0 init=/sbin/init swiotlb=32";
+            bootargs = "{console} {rootfs}";""".format(
+    console = "console=liteuart earlycon=liteuart,0x{:x}".format(d["csr_bases"]["uart"]),
+    rootfs  = "rootwait root=/dev/{}".format(root_device))
+
+    if initrd_enabled is True:
+        dts += """
             linux,initrd-start = <0x{linux_initrd_start:x}>;
-            linux,initrd-end   = <0x{linux_initrd_end:x}>;
-        }};
-""".format(
-    main_ram_base      = d["memories"]["main_ram"]["base"],
-    main_ram_size      = d["memories"]["main_ram"]["size"],
-    main_ram_size_mb   = d["memories"]["main_ram"]["size"] // mB,
-    linux_initrd_start = d["memories"]["main_ram"]["base"] + initrd_start,
-    linux_initrd_end   = d["memories"]["main_ram"]["base"] + initrd_start + initrd_size)
+            linux,initrd-end   = <0x{linux_initrd_end:x}>;""".format(
+        linux_initrd_start = d["memories"]["main_ram"]["base"] + initrd_start,
+        linux_initrd_end   = d["memories"]["main_ram"]["base"] + initrd_start + initrd_size)
+
+    dts += """
+        };
+"""
 
     # CPU ------------------------------------------------------------------------------------------
 
     # VexRiscv-SMP
     # ------------
-    if cpu_name == "vexriscv smp-linux":
+    if cpu_arch == "riscv":
         # Cache description.
         cache_desc = ""
         if "cpu_dcache_size" in d["constants"]:
@@ -150,7 +171,7 @@ def generate_dts(d, initrd_start=None, initrd_size=None, polling=False):
 
     # Mor1kx
     # ------
-    elif cpu_name == "mor1kx":
+    elif cpu_arch == "or1k":
         dts += """
         cpus {{
             #address-cells = <1>;
@@ -196,11 +217,35 @@ def generate_dts(d, initrd_start=None, initrd_size=None, polling=False):
             }};
 """.format(
     framebuffer_base = d["constants"]["video_framebuffer_base"],
-    framebuffer_size = (d["constants"]["video_framebuffer_hres"] * d["constants"]["video_framebuffer_vres"] * 4))
+    framebuffer_size = (d["constants"]["video_framebuffer_hres"] * d["constants"]["video_framebuffer_vres"] * (d["constants"]["video_framebuffer_depth"]//8)))
 
         dts += """
         };
 """
+
+    # Clock ----------------------------------------------------------------------------------------
+
+    dts += """
+        clocks {{
+            sys_clk: litex_sys_clk {{
+                #clock-cells = <0>;
+                compatible = "fixed-clock";
+                clock-frequency = <{sys_clk_freq}>;
+            }};
+        }};
+""".format(sys_clk_freq=d["constants"]["config_clock_frequency"])
+
+    # Voltage Regulator for LiteSDCard (if applicable) --------------------------------------------
+    if "sdcore" in d["csr_bases"]:
+        dts += """
+        vreg_mmc: vreg_mmc {{
+            compatible = "regulator-fixed";
+            regulator-name = "vreg_mmc";
+            regulator-min-microvolt = <3300000>;
+            regulator-max-microvolt = <3300000>;
+            regulator-always-on;
+        }};
+""".format()
 
     # SoC ------------------------------------------------------------------------------------------
 
@@ -208,11 +253,10 @@ def generate_dts(d, initrd_start=None, initrd_size=None, polling=False):
         soc {{
             #address-cells = <1>;
             #size-cells    = <1>;
-            bus-frequency  = <{sys_clk_freq}>;
             compatible = "simple-bus";
             interrupt-parent = <&intc0>;
             ranges;
-""".format(sys_clk_freq=d["constants"]["config_clock_frequency"])
+""".format()
 
     # SoC Controller -------------------------------------------------------------------------------
 
@@ -226,7 +270,7 @@ def generate_dts(d, initrd_start=None, initrd_size=None, polling=False):
 
     # Interrupt Controller -------------------------------------------------------------------------
 
-    if cpu_name == "vexriscv smp-linux":
+    if cpu_arch == "riscv":
         dts += """
             intc0: interrupt-controller@{plic_base:x} {{
                 compatible = "sifive,fu540-c000-plic", "sifive,plic-1.0.0";
@@ -242,7 +286,7 @@ def generate_dts(d, initrd_start=None, initrd_size=None, polling=False):
         plic_base   =d["memories"]["plic"]["base"],
         cpu_mapping =("\n" + " "*20).join(["&L{} 11 &L{} 9".format(cpu, cpu) for cpu in cpus]))
 
-    elif cpu_name == "mor1kx":
+    elif cpu_arch == "or1k":
         dts += """
             intc0: interrupt-controller {
                 interrupt-controller;
@@ -362,6 +406,9 @@ def generate_dts(d, initrd_start=None, initrd_size=None, polling=False):
                       <0x{sdblock2mem:x} 0x100>,
                       <0x{sdmem2block:x} 0x100>,
                       <0x{sdirq:x} 0x100>;
+                reg-names = "phy", "core", "reader", "writer", "irq";
+                clocks = <&sys_clk>;
+                vmmc-supply = <&vreg_mmc>;
                 bus-width = <0x04>;
                 {sdirq_interrupt}
                 status = "okay";
@@ -476,6 +523,10 @@ def generate_dts(d, initrd_start=None, initrd_size=None, polling=False):
         framebuffer_base   = d["constants"]["video_framebuffer_base"]
         framebuffer_width  = d["constants"]["video_framebuffer_hres"]
         framebuffer_height = d["constants"]["video_framebuffer_vres"]
+        framebuffer_depth  = d["constants"]["video_framebuffer_depth"]
+        framebuffer_format = "a8b8g8r8"
+        if (framebuffer_depth == 16):
+            framebuffer_format = "r5g6b5"
         dts += """
             framebuffer0: framebuffer@{framebuffer_base:x} {{
                 compatible = "simple-framebuffer";
@@ -483,14 +534,15 @@ def generate_dts(d, initrd_start=None, initrd_size=None, polling=False):
                 width = <{framebuffer_width}>;
                 height = <{framebuffer_height}>;
                 stride = <{framebuffer_stride}>;
-                format = "a8b8g8r8";
+                format = "{framebuffer_format}";
             }};
 """.format(
     framebuffer_base   = framebuffer_base,
     framebuffer_width  = framebuffer_width,
     framebuffer_height = framebuffer_height,
-    framebuffer_size   = framebuffer_width * framebuffer_height * 4,
-    framebuffer_stride = framebuffer_width * 4)
+    framebuffer_size   = framebuffer_width * framebuffer_height * (framebuffer_depth//8),
+    framebuffer_stride = framebuffer_width * (framebuffer_depth//8),
+    framebuffer_format = framebuffer_format)
 
     # ICAP Bitstream -------------------------------------------------------------------------------
 
@@ -624,17 +676,22 @@ def generate_dts(d, initrd_start=None, initrd_size=None, polling=False):
     return dts
 
 def main():
+
     parser = argparse.ArgumentParser(description="LiteX's CSR JSON to Linux DTS generator")
     parser.add_argument("csr_json", help="CSR JSON file")
-    parser.add_argument("--initrd-start", type=int,            help="Location of initrd in RAM (relative, default depends on CPU)")
-    parser.add_argument("--initrd-size",  type=int,            help="Size of initrd (default=8MB)")
-    parser.add_argument("--polling",      action="store_true", help="Force polling mode on peripherals")
+    parser.add_argument("--initrd-start", type=int,            help="Location of initrd in RAM (relative, default depends on CPU).")
+    parser.add_argument("--initrd-size",  type=int,            help="Size of initrd (default=8MB).")
+    parser.add_argument("--initrd",       type=str,            help="Supports arguments 'enabled', 'disabled' or a file name. Set to 'disabled' if you use a kernel built in rootfs or have your rootfs on an SD card partition. If a file name is provied the size of the file will be used instead of --initrd-size. (default=enabled).")
+    parser.add_argument("--root-device",  type=str,            help="Device that has our rootfs, if using initrd use the default. For SD card's use something like mmcblk0p3. (default=ram0).")
+    parser.add_argument("--polling",      action="store_true", help="Force polling mode on peripherals.")
     args = parser.parse_args()
 
     d = json.load(open(args.csr_json))
     r = generate_dts(d,
         initrd_start = args.initrd_start,
         initrd_size  = args.initrd_size,
+        initrd       = args.initrd,
+        root_device  = args.root_device,
         polling      = args.polling,
     )
     print(r)

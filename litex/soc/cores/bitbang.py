@@ -23,18 +23,21 @@ class I2CMaster(Module, AutoCSR):
     Software get back SDA value with the read CSRStatus (_r).
     """
     pads_layout = [("scl", 1), ("sda", 1)]
-    def __init__(self, pads=None):
+    def __init__(self, pads=None, default_dev=False):
+        self.init = []
         if pads is None:
             pads = Record(self.pads_layout)
         self.pads = pads
         self._w = CSRStorage(fields=[
-            CSRField("scl", size=1, offset=0),
+            CSRField("scl", size=1, offset=0, reset=1),
             CSRField("oe",  size=1, offset=1),
-            CSRField("sda", size=1, offset=2)],
+            CSRField("sda", size=1, offset=2, reset=1)],
             name="w")
         self._r = CSRStatus(fields=[
             CSRField("sda", size=1, offset=0)],
             name="r")
+
+        self.default_dev = default_dev
 
         self.connect(pads)
 
@@ -50,6 +53,9 @@ class I2CMaster(Module, AutoCSR):
             oe = self._w.fields.oe & ~self._w.fields.sda, # Drive when oe and sda is low.
             i  = self._r.fields.sda
         )
+
+    def add_init(self, addr, init, init_addr_len=1):
+        self.init.append((addr, init, init_addr_len))
 
 class I2CMasterSim(I2CMaster):
     """I2C Master Bit-Banging for Verilator simulation
@@ -76,6 +82,22 @@ class I2CMasterSim(I2CMaster):
                 self._r.fields.sda.eq(pads.sda_in),
             )
         ]
+
+# I2C Master Info Collection  ----------------------------------------------------------------------
+
+# TODO: Find a more generic way to do it that would also apply to other peripherals?
+
+def collect_i2c_info(soc):
+    i2c_init = []
+    i2c_devs = []
+    for name, obj in xdir(soc, True):
+        if isinstance(obj, I2CMaster):
+            soc.add_config("HAS_I2C", check_duplicate=False)
+            i2c_devs.append((name, getattr(obj, "default_dev")))
+            if hasattr(obj, "init"):
+                for addr, init, init_addr_len in obj.init:
+                    i2c_init.append((name, addr, init, init_addr_len))
+    return i2c_devs, i2c_init
 
 # SPI Master Bit-Banging ---------------------------------------------------------------------------
 
