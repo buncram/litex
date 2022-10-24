@@ -19,6 +19,7 @@ from litex.soc.cores.cpu import CPU
 
 class Zynq7000(CPU):
     variants             = ["standard"]
+    category             = "hardcore"
     family               = "arm"
     name                 = "zynq7000"
     human_name           = "Zynq7000"
@@ -36,7 +37,7 @@ class Zynq7000(CPU):
     @property
     def mem_map(self):
         return {
-            "sram": 0x10_0000,  # DDR in fact
+            "sram": 0x0010_0000,  # DDR in fact
             "rom":  0xfc00_0000,
         }
 

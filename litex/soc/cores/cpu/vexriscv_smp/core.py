@@ -20,26 +20,20 @@ import os
 
 class Open(Signal): pass
 
-# Variants -----------------------------------------------------------------------------------------
-
-CPU_VARIANTS = {
-    "standard": "VexRiscv",
-    "linux":    "VexRiscv", # Similar to standard.
-}
-
 # VexRiscv SMP -------------------------------------------------------------------------------------
 
 class VexRiscvSMP(CPU):
+    category             = "softcore"
     family               = "riscv"
     name                 = "vexriscv"
     human_name           = "VexRiscv SMP"
-    variants             = CPU_VARIANTS
+    variants             = ["standard", "linux"]
     data_width           = 32
     endianness           = "little"
     gcc_triple           = CPU_GCC_TRIPLE_RISCV32
     linker_output_format = "elf32-littleriscv"
     nop                  = "nop"
-    io_regions           = {0x80000000: 0x80000000} # Origin, Length.
+    io_regions           = {0x8000_0000: 0x8000_0000} # Origin, Length.
 
     # Default parameters.
     cpu_count            = 1
@@ -54,6 +48,7 @@ class VexRiscvSMP(CPU):
     aes_instruction      = False
     out_of_order_decoder = True
     wishbone_memory      = False
+    wishbone_force_32b   = False
     with_fpu             = False
     cpu_per_fpu          = 4
     with_rvc             = False
@@ -63,7 +58,7 @@ class VexRiscvSMP(CPU):
     # Command line configuration arguments.
     @staticmethod
     def args_fill(parser):
-        cpu_group = parser.add_argument_group("cpu")
+        cpu_group = parser.add_argument_group(title="CPU options")
         cpu_group.add_argument("--cpu-count",                    default=1,           help="Number of CPU(s) in the cluster.", type=int)
         cpu_group.add_argument("--with-coherent-dma",            action="store_true", help="Enable Coherent DMA Slave interface.")
         cpu_group.add_argument("--without-coherent-dma",         action="store_true", help="Disable Coherent DMA Slave interface.")
@@ -76,6 +71,7 @@ class VexRiscvSMP(CPU):
         cpu_group.add_argument("--aes-instruction",              default=None,        help="Enable AES instruction acceleration.")
         cpu_group.add_argument("--without-out-of-order-decoder", action="store_true", help="Reduce area at cost of peripheral access speed")
         cpu_group.add_argument("--with-wishbone-memory",         action="store_true", help="Disable native LiteDRAM interface")
+        cpu_group.add_argument("--wishbone-force-32b",           action="store_true", help="Force the wishbone bus to be 32 bits")
         cpu_group.add_argument("--with-fpu",                     action="store_true", help="Enable the F32/F64 FPU")
         cpu_group.add_argument("--cpu-per-fpu",                  default="4",         help="Maximal ratio between CPU count and FPU count. Will instanciate as many FPU as necessary.")
         cpu_group.add_argument("--with-rvc",                     action="store_true", help="Enable RISC-V compressed instruction support")
@@ -104,6 +100,7 @@ class VexRiscvSMP(CPU):
         if(args.aes_instruction):              VexRiscvSMP.aes_instruction       = bool(args.aes_instruction)
         if(args.without_out_of_order_decoder): VexRiscvSMP.out_of_order_decoder  = False
         if(args.with_wishbone_memory):         VexRiscvSMP.wishbone_memory       = True
+        if(args.wishbone_force_32b):           VexRiscvSMP.wishbone_force_32b    = True
         if(args.with_fpu):
             VexRiscvSMP.with_fpu     = True
             VexRiscvSMP.icache_width = 64
@@ -126,7 +123,7 @@ class VexRiscvSMP(CPU):
     # Arch.
     @staticmethod
     def get_arch():
-        arch = "rv32ima"
+        arch = "rv32i2p0_ma"
         if VexRiscvSMP.with_fpu:
             arch += "fd"
         if VexRiscvSMP.with_rvc:
@@ -137,12 +134,12 @@ class VexRiscvSMP(CPU):
     @property
     def mem_map(self):
         return {
-            "rom":      0x00000000,
-            "sram":     0x10000000,
-            "main_ram": 0x40000000,
-            "csr":      0xf0000000,
-            "clint":    0xf0010000,
-            "plic":     0xf0c00000,
+            "rom":      0x0000_0000,
+            "sram":     0x1000_0000,
+            "main_ram": 0x4000_0000,
+            "csr":      0xf000_0000,
+            "clint":    0xf001_0000,
+            "plic":     0xf0c0_0000,
         }
 
     # GCC Flags.
@@ -175,6 +172,7 @@ class VexRiscvSMP(CPU):
         f"{'_Aes'  if VexRiscvSMP.aes_instruction      else ''}" \
         f"{'_Ood'  if VexRiscvSMP.out_of_order_decoder else ''}" \
         f"{'_Wm'   if VexRiscvSMP.wishbone_memory      else ''}" \
+        f"{'_Wf32' if VexRiscvSMP.wishbone_force_32b   else ''}" \
         f"{'_Fpu' + str(VexRiscvSMP.cpu_per_fpu)  if VexRiscvSMP.with_fpu else ''}" \
         f"{'_Rvc'  if VexRiscvSMP.with_rvc else ''}"
 
@@ -182,8 +180,12 @@ class VexRiscvSMP(CPU):
     @staticmethod
     def generate_default_configs():
         # Single cores.
-        for data_width in [16, 32, 64, 128]:
-            VexRiscvSMP.litedram_width = data_width
+        for data_width in [None, 16, 32, 64, 128]:
+            if data_width is None:
+                VexRiscvSMP.wishbone_memory = True
+            else:
+                VexRiscvSMP.wishbone_memory = False
+                VexRiscvSMP.litedram_width = data_width
             VexRiscvSMP.icache_width   = 32
             VexRiscvSMP.dcache_width   = 32
             VexRiscvSMP.coherent_dma   = False
@@ -210,8 +212,10 @@ class VexRiscvSMP(CPU):
             VexRiscvSMP.icache_size    = 8192
             VexRiscvSMP.dcache_ways    = 2
             VexRiscvSMP.icache_ways    = 2
-            VexRiscvSMP.icache_width   = 32 if data_width < 64 else 64
-            VexRiscvSMP.dcache_width   = 32 if data_width < 64 else 64
+            VexRiscvSMP.icache_width   = 32 if data_width is None \
+                                              or data_width < 64 else 64
+            VexRiscvSMP.dcache_width   = 32 if data_width is None \
+                                              or data_width < 64 else 64
 
             # Without DMA.
             VexRiscvSMP.coherent_dma = False
@@ -256,6 +260,7 @@ class VexRiscvSMP(CPU):
         gen_args.append(f"--aes-instruction={VexRiscvSMP.aes_instruction}")
         gen_args.append(f"--out-of-order-decoder={VexRiscvSMP.out_of_order_decoder}")
         gen_args.append(f"--wishbone-memory={VexRiscvSMP.wishbone_memory}")
+        if(VexRiscvSMP.wishbone_force_32b): gen_args.append(f"--wishbone-force-32b={VexRiscvSMP.wishbone_force_32b}")
         gen_args.append(f"--fpu={VexRiscvSMP.with_fpu}")
         gen_args.append(f"--cpu-per-fpu={VexRiscvSMP.cpu_per_fpu}")
         gen_args.append(f"--rvc={VexRiscvSMP.with_rvc}")
@@ -270,8 +275,8 @@ class VexRiscvSMP(CPU):
 
     def __init__(self, platform, variant):
         self.platform         = platform
-        self.variant          = "standard"
-        self.human_name       = self.human_name + "-" + variant.upper()
+        self.variant          = "linux"
+        self.human_name       = self.human_name + "-" + self.variant.upper()
         self.reset            = Signal()
         self.jtag_clk         = Signal()
         self.jtag_enable      = Signal()
@@ -282,8 +287,12 @@ class VexRiscvSMP(CPU):
         self.jtag_tdo         = Signal()
         self.jtag_tdi         = Signal()
         self.interrupt        = Signal(32)
-        self.pbus             = pbus    = wishbone.Interface()
-
+        self.pbus             = pbus = wishbone.Interface(data_width={
+            # Always 32-bit when using direct LiteDRAM interfaces.
+            False : 32,
+            # Else max of I/DCache-width.
+            True  : max(VexRiscvSMP.icache_width, VexRiscvSMP.dcache_width),
+        }[VexRiscvSMP.wishbone_memory and not VexRiscvSMP.wishbone_force_32b])
         self.periph_buses     = [pbus] # Peripheral buses (Connected to main SoC's bus).
         self.memory_buses     = []     # Memory buses (Connected directly to LiteDRAM).
 
@@ -348,7 +357,7 @@ class VexRiscvSMP(CPU):
 
     def set_reset_address(self, reset_address):
         self.reset_address = reset_address
-        assert reset_address == 0x00000000
+        assert reset_address == 0x0000_0000
 
     def add_sources(self, platform):
         vdir = get_data_mod("cpu", "vexriscv_smp").data_location
@@ -365,6 +374,10 @@ class VexRiscvSMP(CPU):
         from litex.build.altera import AlteraPlatform
         if isinstance(platform, AlteraPlatform):
             ram_filename = "Ram_1w_1rs_Intel.v"
+            # define SYNTHESIS verilog name to avoid issues with unsupported
+            # functions
+            platform.toolchain.additional_qsf_commands.append(
+                'set_global_assignment -name VERILOG_MACRO "SYNTHESIS=1"')
         # On Efinix platforms, use specific implementation.
         from litex.build.efinix import EfinixPlatform
         if isinstance(platform, EfinixPlatform):
@@ -375,6 +388,16 @@ class VexRiscvSMP(CPU):
         platform.add_source(os.path.join(vdir,  self.cluster_name + ".v"), "verilog")
 
     def add_soc_components(self, soc, soc_region_cls):
+        # Set UART/Timer0 CSRs/IRQs to the ones used by OpenSBI.
+        soc.csr.add("uart",   n=2)
+        soc.csr.add("timer0", n=3)
+
+        soc.irq.add("uart",   n=0)
+        soc.irq.add("timer0", n=1)
+
+        # Add OpenSBI region.
+        soc.add_memory_region("opensbi", self.mem_map["main_ram"] + 0x00f0_0000, 0x8_0000, type="cached+linker")
+
         # Define number of CPUs
         soc.add_config("CPU_COUNT", VexRiscvSMP.cpu_count)
         soc.add_constant("CPU_ISA", VexRiscvSMP.get_arch())
@@ -407,7 +430,7 @@ class VexRiscvSMP(CPU):
             o_plicWishbone_DAT_MISO  = plicbus.dat_r,
             i_plicWishbone_DAT_MOSI  = plicbus.dat_w
         )
-        soc.bus.add_slave("plic", self.plicbus, region=soc_region_cls(origin=soc.mem_map.get("plic"), size=0x400000, cached=False))
+        soc.bus.add_slave("plic", self.plicbus, region=soc_region_cls(origin=soc.mem_map.get("plic"), size=0x40_0000, cached=False))
 
         # Add CLINT as Bus Slave
         self.clintbus = clintbus = wishbone.Interface()
@@ -420,7 +443,7 @@ class VexRiscvSMP(CPU):
             o_clintWishbone_DAT_MISO = clintbus.dat_r,
             i_clintWishbone_DAT_MOSI = clintbus.dat_w,
         )
-        soc.bus.add_slave("clint", clintbus, region=soc_region_cls(origin=soc.mem_map.get("clint"), size=0x10000, cached=False))
+        soc.bus.add_slave("clint", clintbus, region=soc_region_cls(origin=soc.mem_map.get("clint"), size=0x1_0000, cached=False))
 
     def add_memory_buses(self, address_width, data_width):
         VexRiscvSMP.litedram_width = data_width

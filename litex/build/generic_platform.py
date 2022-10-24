@@ -132,6 +132,12 @@ def _resource_type(resource):
 class ConnectorManager:
     def __init__(self, connectors):
         self.connector_table = dict()
+        self.add_connector(connectors)
+
+    def add_connector(self, connectors):
+        if isinstance(connectors, tuple):
+            connectors = [connectors]
+
         for connector in connectors:
             cit       = iter(connector)
             conn_name = next(cit)
@@ -162,7 +168,10 @@ class ConnectorManager:
                 if pn.isdigit():
                     pn = int(pn)
 
-                r.append(self.connector_table[conn][pn])
+                conn_pn = self.connector_table[conn][pn]
+                if ":" in conn_pn:
+                    conn_pn = self.resolve_identifiers([conn_pn])[0]
+                r.append(conn_pn)
             else:
                 r.append(identifier)
 
@@ -192,6 +201,9 @@ class ConstraintManager:
 
     def add_extension(self, io):
         self.available.extend(io)
+
+    def add_connector(self, connectors):
+        self.connector_manager.add_connector(connectors)
 
     def request(self, name, number=None, loose=False):
         resource = _lookup(self.available, name, number, loose)
@@ -230,7 +242,18 @@ class ConstraintManager:
             except ConstraintError:
                 break
         if not len(r):
-            raise ValueError
+            raise ValueError(f"Could not request some pin(s) named '{name}'")
+        return Cat(r)
+
+    def request_remaining(self, name):
+        r = []
+        while True:
+            try:
+                r.append(self.request(name))
+            except ConstraintError:
+                break
+        if not len(r):
+            raise ValueError(f"Could not request any pins named '{name}'")
         return Cat(r)
 
     def lookup_request(self, name, number=None, loose=False):
@@ -321,6 +344,9 @@ class GenericPlatform:
     def request_all(self, *args, **kwargs):
         return self.constraint_manager.request_all(*args, **kwargs)
 
+    def request_remaining(self, *args, **kwargs):
+        return self.constraint_manager.request_remaining(*args, **kwargs)
+
     def lookup_request(self, *args, **kwargs):
         return self.constraint_manager.lookup_request(*args, **kwargs)
 
@@ -341,6 +367,9 @@ class GenericPlatform:
 
     def add_extension(self, *args, **kwargs):
         return self.constraint_manager.add_extension(*args, **kwargs)
+
+    def add_connector(self, *args, **kwargs):
+        self.constraint_manager.add_connector(*args, **kwargs)
 
     def finalize(self, fragment, *args, **kwargs):
         if self.finalized:

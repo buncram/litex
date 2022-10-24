@@ -64,6 +64,8 @@ class SoCCore(LiteXSoC):
         bus_data_width           = 32,
         bus_address_width        = 32,
         bus_timeout              = 1e6,
+        bus_bursting             = False,
+        bus_interconnect         = "shared",
 
         # CPU parameters
         cpu_type                 = "vexriscv",
@@ -122,6 +124,8 @@ class SoCCore(LiteXSoC):
             bus_data_width       = bus_data_width,
             bus_address_width    = bus_address_width,
             bus_timeout          = bus_timeout,
+            bus_bursting         = bus_bursting,
+            bus_interconnect     = bus_interconnect,
             bus_reserved_regions = {},
 
             csr_data_width       = csr_data_width,
@@ -295,12 +299,14 @@ class SoCCore(LiteXSoC):
 # SoCCore arguments --------------------------------------------------------------------------------
 
 def soc_core_args(parser):
-    soc_group = parser.add_argument_group("soc")
+    soc_group = parser.add_argument_group(title="SoC options")
     # Bus parameters
     soc_group.add_argument("--bus-standard",      default="wishbone",                help="Select bus standard: {}.".format(", ".join(SoCBusHandler.supported_standard)))
     soc_group.add_argument("--bus-data-width",    default=32,         type=auto_int, help="Bus data-width.")
     soc_group.add_argument("--bus-address-width", default=32,         type=auto_int, help="Bus address-width.")
     soc_group.add_argument("--bus-timeout",       default=int(1e6),   type=float,    help="Bus timeout in cycles.")
+    soc_group.add_argument("--bus-bursting",      action="store_true",               help="Enable burst cycles on the bus if supported.")
+    soc_group.add_argument("--bus-interconnect",  default="shared",                  help="Select bus interconnect: shared (default) or crossbar.")
 
     # CPU parameters
     soc_group.add_argument("--cpu-type",          default="vexriscv",               help="Select CPU: {}.".format(", ".join(iter(cpu.CPUS.keys()))))
@@ -342,12 +348,14 @@ def soc_core_args(parser):
     soc_group.add_argument("--timer-uptime",    action="store_true", help="Add an uptime capability to Timer.")
 
     # L2 Cache
-    soc_group.add_argument("--l2-size",           default=8192, type=auto_int, help="L2 cache size.")
+    soc_group.add_argument("--l2-size", default=8192, type=auto_int, help="L2 cache size.")
 
 def soc_core_argdict(args):
     r = dict()
-    # Iterate on all SoCCore arguments.
-    for a in inspect.getfullargspec(SoCCore.__init__).args:
+    # Iterate on all arguments.
+    soc_args  = inspect.getfullargspec(SoCCore.__init__).args
+    full_args = soc_args + ["l2_size"]
+    for a in full_args:
         # Exclude specific arguments.
         if a in ["self", "platform"]:
             continue
@@ -359,7 +367,7 @@ def soc_core_argdict(args):
             arg = not getattr(args, "no_ident_version")
         # Regular cases.
         else:
-             arg = getattr(args, a, None)
+            arg = getattr(args, a, None)
         # Fill Dict.
         if arg is not None:
             r[a] = arg

@@ -4,20 +4,17 @@
 # Copyright (c) 2020-2022 Florent Kermarrec <florent@enjoy-digital.fr>
 # Copyright (c) 2020-2022 Dolu1990 <charles.papon.90@gmail.com>
 # SPDX-License-Identifier: BSD-2-Clause
-import hashlib
+
 import os
+import hashlib
 import subprocess
-from os import path
 
 from migen import *
 
 from litex import get_data_mod
-from litex.soc.interconnect import wishbone
 from litex.soc.interconnect import axi
 from litex.soc.interconnect.csr import *
-from litex.soc.cores.cpu import CPU, CPU_GCC_TRIPLE_RISCV32
-
-import os
+from litex.soc.cores.cpu import CPU, CPU_GCC_TRIPLE_RISCV32, CPU_GCC_TRIPLE_RISCV64
 
 class Open(Signal): pass
 
@@ -30,6 +27,7 @@ CPU_VARIANTS = {
 # NaxRiscv -----------------------------------------------------------------------------------------
 
 class NaxRiscv(CPU):
+    category             = "softcore"
     family               = "riscv"
     name                 = "naxriscv"
     human_name           = "NaxRiscv"
@@ -39,19 +37,23 @@ class NaxRiscv(CPU):
     gcc_triple           = CPU_GCC_TRIPLE_RISCV32
     linker_output_format = "elf32-littleriscv"
     nop                  = "nop"
-    io_regions           = {0x80000000: 0x80000000} # Origin, Length.
+    io_regions           = {0x8000_0000: 0x8000_0000} # Origin, Length.
 
     # Default parameters.
-    with_fpu             = False
-    with_rvc             = False
-    scala_files          = ["misc.scala", "fetch.scala", "frontend.scala", "branch_predictor_std.scala", "lsu.scala", "eu_2alu_1share.scala"]
-    netlist_name         = None
-    scala_paths          = []
+    with_fpu         = False
+    with_rvc         = False
+    scala_args       = []
+    scala_files      = ["gen.scala"]
+    netlist_name     = None
+    scala_paths      = []
+    xlen             = 32
+    jtag_tap         = False
+    jtag_instruction = False
 
     # ABI.
     @staticmethod
     def get_abi():
-        abi = "ilp32"
+        abi = "lp64" if NaxRiscv.xlen == 64 else "ilp32"
         if NaxRiscv.with_fpu:
             abi +="d"
         return abi
@@ -59,7 +61,7 @@ class NaxRiscv(CPU):
     # Arch.
     @staticmethod
     def get_arch():
-        arch = "rv32ima"
+        arch = f"rv{NaxRiscv.xlen}ima"
         if NaxRiscv.with_fpu:
             arch += "fd"
         if NaxRiscv.with_rvc:
@@ -70,12 +72,12 @@ class NaxRiscv(CPU):
     @property
     def mem_map(self):
         return {
-            "rom":      0x00000000,
-            "sram":     0x10000000,
-            "main_ram": 0x40000000,
-            "csr":      0xf0000000,
-            "clint":    0xf0010000,
-            "plic":     0xf0c00000,
+            "rom":      0x0000_0000,
+            "sram":     0x1000_0000,
+            "main_ram": 0x4000_0000,
+            "csr":      0xf000_0000,
+            "clint":    0xf001_0000,
+            "plic":     0xf0c0_0000,
         }
 
     # GCC Flags.
@@ -90,14 +92,29 @@ class NaxRiscv(CPU):
     # Command line configuration arguments.
     @staticmethod
     def args_fill(parser):
-        cpu_group = parser.add_argument_group("cpu")
-        cpu_group.add_argument("--scala-file", action='append', help="Specify the scala files used to configure NaxRiscv")
+        cpu_group = parser.add_argument_group(title="CPU options")
+        cpu_group.add_argument("--scala-file",    action="append",     help="Specify the scala files used to configure NaxRiscv.")
+        cpu_group.add_argument("--scala-args",    action="append",     help="Add arguements for the scala run time. Ex : --scala-args 'rvc=true,mmu=false'")
+        cpu_group.add_argument("--xlen",          default=32,          help="Specify the RISC-V data width.")
+        cpu_group.add_argument("--with-jtag-tap", action="store_true", help="Add a embedded JTAG tap for debugging")
+        cpu_group.add_argument("--with-jtag-instruction", action="store_true", help="Add a JTAG instruction port which implement tunneling for debugging (TAP not included)")
 
     @staticmethod
     def args_read(args):
         print(args)
+        NaxRiscv.jtag_tap = args.with_jtag_tap
+        NaxRiscv.jtag_instruction = args.with_jtag_instruction
         if args.scala_file:
             NaxRiscv.scala_files = args.scala_file
+        if args.scala_args:
+            NaxRiscv.scala_args = args.scala_args
+            print(args.scala_args)
+        if args.xlen:
+            xlen = int(args.xlen)
+            NaxRiscv.xlen                 = xlen
+            NaxRiscv.data_width           = xlen
+            NaxRiscv.gcc_triple           = CPU_GCC_TRIPLE_RISCV64
+            NaxRiscv.linker_output_format = f"elf{xlen}-littleriscv"
 
 
     def __init__(self, platform, variant):
@@ -106,8 +123,8 @@ class NaxRiscv(CPU):
         self.human_name       = self.human_name
         self.reset            = Signal()
         self.interrupt        = Signal(32)
-        self.ibus             = ibus = axi.AXILiteInterface(address_width=32, data_width=32)
-        self.dbus             = dbus = axi.AXILiteInterface(address_width=32, data_width=32)
+        self.ibus             = ibus = axi.AXILiteInterface(address_width=32, data_width=64)
+        self.dbus             = dbus = axi.AXILiteInterface(address_width=32, data_width=64)
 
         self.periph_buses     = [ibus, dbus] # Peripheral buses (Connected to main SoC's bus).
         self.memory_buses     = []           # Memory buses (Connected directly to LiteDRAM).
@@ -176,6 +193,11 @@ class NaxRiscv(CPU):
     def generate_netlist_name(reset_address):
         md5_hash = hashlib.md5()
         md5_hash.update(str(reset_address).encode('utf-8'))
+        md5_hash.update(str(NaxRiscv.xlen).encode('utf-8'))
+        md5_hash.update(str(NaxRiscv.jtag_tap).encode('utf-8'))
+        md5_hash.update(str(NaxRiscv.jtag_instruction).encode('utf-8'))
+        for args in NaxRiscv.scala_args:
+            md5_hash.update(args.encode('utf-8'))
         for file in NaxRiscv.scala_paths:
             a_file = open(file, "rb")
             content = a_file.read()
@@ -186,7 +208,7 @@ class NaxRiscv(CPU):
 
 
     @staticmethod
-    def git_setup(name, dir, repo, hash):
+    def git_setup(name, dir, repo, branch, hash):
         if not os.path.exists(dir):
             # Clone Repo.
             print(f"Cloning {name} Git repository...")
@@ -196,7 +218,7 @@ class NaxRiscv(CPU):
             ), shell=True)
             # Use specific SHA1 (Optional).
         os.chdir(os.path.join(dir))
-        os.system(f"cd {dir} && git checkout main && git pull && git checkout {hash}")
+        os.system(f"cd {dir} && git checkout {branch} && git pull && git checkout {hash}")
 
     # Netlist Generation.
     @staticmethod
@@ -205,13 +227,22 @@ class NaxRiscv(CPU):
         ndir = os.path.join(vdir, "ext", "NaxRiscv")
         sdir = os.path.join(vdir, "ext", "SpinalHDL")
 
-        NaxRiscv.git_setup("NaxRiscv", ndir, "https://github.com/SpinalHDL/NaxRiscv.git",   "2832adfc")
-        NaxRiscv.git_setup("SpinalHDL", sdir, "https://github.com/SpinalHDL/SpinalHDL.git", "2ff1f4d7")
+        NaxRiscv.git_setup("NaxRiscv", ndir, "https://github.com/SpinalHDL/NaxRiscv.git"  , "main", "b13c0aad")
+        NaxRiscv.git_setup("SpinalHDL", sdir, "https://github.com/SpinalHDL/SpinalHDL.git", "dev" , "a130f7b7")
 
         gen_args = []
         gen_args.append(f"--netlist-name={NaxRiscv.netlist_name}")
         gen_args.append(f"--netlist-directory={vdir}")
         gen_args.append(f"--reset-vector={reset_address}")
+        gen_args.append(f"--xlen={NaxRiscv.xlen}")
+        for args in NaxRiscv.scala_args:
+            gen_args.append(f"--scala-args={args}")
+        if(NaxRiscv.jtag_tap) :
+            gen_args.append(f"--with-jtag-tap")
+        if(NaxRiscv.jtag_instruction) :
+            gen_args.append(f"--with-jtag-instruction")
+        if(NaxRiscv.jtag_tap or NaxRiscv.jtag_instruction):
+            gen_args.append(f"--with-debug")
         for file in NaxRiscv.scala_paths:
             gen_args.append(f"--scala-file={file}")
 
@@ -225,7 +256,7 @@ class NaxRiscv(CPU):
     def add_sources(self, platform):
         vdir = get_data_mod("cpu", "naxriscv").data_location
         print(f"NaxRiscv netlist : {self.netlist_name}")
-        if not path.exists(os.path.join(vdir, self.netlist_name + ".v")):
+        if not os.path.exists(os.path.join(vdir, self.netlist_name + ".v")):
             self.generate_netlist(self.reset_address)
 
         # Add RAM.
@@ -245,13 +276,20 @@ class NaxRiscv(CPU):
         platform.add_source(os.path.join(vdir,  self.netlist_name + ".v"), "verilog")
 
     def add_soc_components(self, soc, soc_region_cls):
+        # Set UART/Timer0 CSRs/IRQs to the ones used by OpenSBI.
         soc.csr.add("uart",   n=2)
         soc.csr.add("timer0", n=3)
+
+        soc.irq.add("uart",   n=0)
+        soc.irq.add("timer0", n=1)
+
+        # Add OpenSBI region.
+        soc.add_memory_region("opensbi", self.mem_map["main_ram"] + 0x00f0_0000, 0x8_0000, type="cached+linker")
 
         # Define ISA.
         soc.add_constant("CPU_ISA", NaxRiscv.get_arch())
 
-        # Add PLIC Bus (Wishbone Slave).
+        # Add PLIC Bus (AXILite Slave).
         self.plicbus = plicbus  = axi.AXILiteInterface(address_width=32, data_width=32)
         self.cpu_params.update(
             i_peripheral_plic_awvalid = plicbus.aw.valid,
@@ -274,9 +312,66 @@ class NaxRiscv(CPU):
             o_peripheral_plic_rdata   = plicbus.r.data,
             o_peripheral_plic_rresp   = plicbus.r.resp,
         )
-        soc.bus.add_slave("plic", self.plicbus, region=soc_region_cls(origin=soc.mem_map.get("plic"), size=0x400000, cached=False))
+        soc.bus.add_slave("plic", self.plicbus, region=soc_region_cls(origin=soc.mem_map.get("plic"), size=0x40_0000, cached=False))
 
-        # Add CLINT Bus (Wishbone Slave).
+        if NaxRiscv.jtag_tap:
+            self.jtag_tms = Signal()
+            self.jtag_tck = Signal()
+            self.jtag_tdi = Signal()
+            self.jtag_tdo = Signal()
+
+            self.cpu_params.update(
+                i_jtag_tms = self.jtag_tms,
+                i_jtag_tck = self.jtag_tck,
+                i_jtag_tdi = self.jtag_tdi,
+                o_jtag_tdo = self.jtag_tdo,
+            )
+
+        if NaxRiscv.jtag_instruction:
+            self.jtag_clk     = Signal()
+            self.jtag_enable  = Signal()
+            self.jtag_capture = Signal()
+            self.jtag_shift   = Signal()
+            self.jtag_update  = Signal()
+            self.jtag_reset   = Signal()
+            self.jtag_tdo     = Signal()
+            self.jtag_tdi     = Signal()
+            
+            self.cpu_params.update(
+                i_jtag_instruction_clk     = self.jtag_clk,
+                i_jtag_instruction_enable  = self.jtag_enable,
+                i_jtag_instruction_capture = self.jtag_capture,
+                i_jtag_instruction_shift   = self.jtag_shift,
+                i_jtag_instruction_update  = self.jtag_update,
+                i_jtag_instruction_reset   = self.jtag_reset,
+                i_jtag_instruction_tdi     = self.jtag_tdi,
+                o_jtag_instruction_tdo     = self.jtag_tdo,
+            )
+
+        if NaxRiscv.jtag_instruction or NaxRiscv.jtag_tap:
+            # Create PoR Clk Domain for debug_reset.
+            self.clock_domains.cd_debug_por = ClockDomain()
+            self.comb += self.cd_debug_por.clk.eq(ClockSignal("sys"))
+
+            # Create PoR debug_reset.
+            debug_reset = Signal(reset=1)
+            self.sync.debug_por += debug_reset.eq(0)
+
+            # Debug resets.
+            debug_ndmreset      = Signal()
+            debug_ndmreset_last = Signal()
+            debug_ndmreset_rise = Signal()
+            self.cpu_params.update(
+                i_debug_reset    = debug_reset,
+                o_debug_ndmreset = debug_ndmreset,
+            )
+
+            # Reset SoC's CRG when debug_ndmreset rising edge.
+            self.sync.debug_por += debug_ndmreset_last.eq(debug_ndmreset)
+            self.comb += debug_ndmreset_rise.eq(debug_ndmreset & ~debug_ndmreset_last)
+            self.comb += If(debug_ndmreset_rise, soc.crg.rst.eq(1))
+
+        # Add CLINT Bus (AXILite Slave).
         self.clintbus = clintbus = axi.AXILiteInterface(address_width=32, data_width=32)
         self.cpu_params.update(
             i_peripheral_clint_awvalid = clintbus.aw.valid,
@@ -299,7 +394,7 @@ class NaxRiscv(CPU):
             o_peripheral_clint_rdata   = clintbus.r.data,
             o_peripheral_clint_rresp   = clintbus.r.resp,
         )
-        soc.bus.add_slave("clint", clintbus, region=soc_region_cls(origin=soc.mem_map.get("clint"), size=0x10000, cached=False))
+        soc.bus.add_slave("clint", clintbus, region=soc_region_cls(origin=soc.mem_map.get("clint"), size=0x1_0000, cached=False))
 
     def add_memory_buses(self, address_width, data_width):
         nax_data_width = 64
@@ -375,5 +470,5 @@ class NaxRiscv(CPU):
         # Do verilog instance.
         self.specials += Instance(self.netlist_name, **self.cpu_params)
 
-        # Add verilog sources
+        # Add verilog sources.
         self.add_sources(self.platform)

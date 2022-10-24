@@ -1,7 +1,9 @@
 #
 # This file is part of LiteX.
 #
-# Copyright (c) 2021 Florent Kermarrec <florent@enjoy-digital.fr>
+# Copyright (c) 2021-2022 Florent Kermarrec <florent@enjoy-digital.fr>
+# Copyright (c) 2021 Romain Dolbeau <romain@dolbeau.org>
+# Copyright (c) 2022 Franck Jullien <franck.jullien@collshade.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
 import os
@@ -181,12 +183,12 @@ class VideoTimingGenerator(Module, AutoCSR):
         self._hres        = CSRStorage(hbits, vt["h_active"])
         self._hsync_start = CSRStorage(hbits, vt["h_active"] + vt["h_sync_offset"])
         self._hsync_end   = CSRStorage(hbits, vt["h_active"] + vt["h_sync_offset"] + vt["h_sync_width"])
-        self._hscan       = CSRStorage(hbits, vt["h_active"] + vt["h_blanking"])
+        self._hscan       = CSRStorage(hbits, vt["h_active"] + vt["h_blanking"] - 1)
 
         self._vres        = CSRStorage(vbits, vt["v_active"])
         self._vsync_start = CSRStorage(vbits, vt["v_active"] + vt["v_sync_offset"])
         self._vsync_end   = CSRStorage(vbits, vt["v_active"] + vt["v_sync_offset"] + vt["v_sync_width"])
-        self._vscan       = CSRStorage(vbits, vt["v_active"] + vt["v_blanking"])
+        self._vscan       = CSRStorage(vbits, vt["v_active"] + vt["v_blanking"] - 1)
 
         # Video Timing Source
         self.source = source = stream.Endpoint(video_timing_layout)
@@ -242,28 +244,21 @@ class VideoTimingGenerator(Module, AutoCSR):
                 # Increment HCount.
                 NextValue(source.hcount, source.hcount + 1),
                 # Generate HActive / HSync.
-                If(source.hcount == 0,             NextValue(hactive,       1)), # Start of HActive.
-                If(source.hcount == hres,          NextValue(hactive,       0)), # End of HActive.
-                If(source.hcount == hsync_start,
-                    NextValue(source.hsync, 1),                                  # Start of HSync.
-                    NextValue(source.vsync, 1),                                  # Start of VSync.
-                    NextValue(source.vcount, vsync_start)
-                ),
-                If(source.hcount == hsync_end,     NextValue(source.hsync,  0)), # End of HSync.
-                If(source.hcount == hscan,         NextValue(source.hcount, 0)), # Reset HCount.
-                # End of HScan.
+                If(source.hcount == 0,           NextValue(hactive,       1)), # Start of HActive.
+                If(source.hcount == hres,        NextValue(hactive,       0)), # End of HActive.
+                If(source.hcount == hsync_start, NextValue(source.hsync,  1)),
+                If(source.hcount == hsync_end,   NextValue(source.hsync,  0)), # End of HSync.
+                If(source.hcount == hscan,       NextValue(source.hcount, 0)), # End of HScan.
+
                 If(source.hcount == hsync_start,
                     # Increment VCount.
                     NextValue(source.vcount, source.vcount + 1),
                     # Generate VActive / VSync.
-                    If(source.vcount == 0,         NextValue(vactive,       1)), # Start of VActive.
-                    If(source.vcount == vres,      NextValue(vactive,       0)), # End of HActive.
-                    If(source.vcount == vsync_end, NextValue(source.vsync,  0)), # End of VSync.
-                    # End of VScan.
-                    If(source.vcount == vscan,
-                        # Reset VCount.
-                        NextValue(source.vcount, 0),
-                    )
+                    If(source.vcount == 0,           NextValue(vactive,       1)), # Start of VActive.
+                    If(source.vcount == vres,        NextValue(vactive,       0)), # End of VActive.
+                    If(source.vcount == vsync_start, NextValue(source.vsync,  1)),
+                    If(source.vcount == vsync_end,   NextValue(source.vsync,  0)), # End of VSync.
+                    If(source.vcount == vscan,       NextValue(source.vcount, 0))  # End of VScan.
                 )
             )
         )
@@ -307,6 +302,9 @@ class ColorBarsPattern(Module):
                     NextValue(pix, 0),
                     NextValue(bar, bar + 1)
                 )
+            ).Else(
+                NextValue(pix, 0),
+                NextValue(bar, 0)
             )
         )
 
@@ -441,8 +439,10 @@ class VideoTerminal(Module):
 
         # Font Mem.
         # ---------
-        os.system("wget https://github.com/enjoy-digital/litex/files/6076336/ter-u16b.txt") # FIXME: Store Font in LiteX?
-        os.system("mv ter-u16b.txt ter-u16b.bdf")
+        # FIXME: Store Font in LiteX?
+        if not os.path.exists("ter-u16b.bdf"):
+            os.system("wget https://github.com/enjoy-digital/litex/files/6076336/ter-u16b.txt")
+            os.system("mv ter-u16b.txt ter-u16b.bdf")
         font        = import_bdf_font("ter-u16b.bdf")
         font_width  = 8
         font_heigth = 16
@@ -658,10 +658,11 @@ class VideoFrameBuffer(Module, AutoCSR):
             # ... and then Clock Domain Crossing.
             self.submodules.cdc = stream.ClockDomainCrossing([("data", depth)], cd_from="sys", cd_to=clock_domain)
             self.comb += self.conv.source.connect(self.cdc.sink)
-            self.comb += If((dram_port.data_width < depth) and (depth == 32), # FIXME.
-                self.cdc.sink.data[ 0: 8].eq(self.conv.source.data[16:24]),
-                self.cdc.sink.data[16:24].eq(self.conv.source.data[ 0: 8]),
-            )
+            if (dram_port.data_width < depth) and (depth == 32): # FIXME.
+                self.comb += [
+                    self.cdc.sink.data[ 0: 8].eq(self.conv.source.data[16:24]),
+                    self.cdc.sink.data[16:24].eq(self.conv.source.data[ 0: 8]),
+                ]
             video_pipe_source = self.cdc.source
 
         # Video Generation.
@@ -673,16 +674,19 @@ class VideoFrameBuffer(Module, AutoCSR):
 
             ),
             vtg_sink.connect(source, keep={"de", "hsync", "vsync"}),
-            If(depth == 32,
+        ]
+        if (depth == 32):
+            self.comb += [
                source.r.eq(video_pipe_source.data[16:24]),
                source.g.eq(video_pipe_source.data[ 8:16]),
                source.b.eq(video_pipe_source.data[ 0: 8]),
-            ).Else( # depth == 16
+            ]
+        else: # depth == 16
+            self.comb += [
                 source.r.eq(Cat(Signal(3, reset = 0), video_pipe_source.data[ 0: 5])),
                 source.g.eq(Cat(Signal(2, reset = 0), video_pipe_source.data[ 5:11])),
                 source.b.eq(Cat(Signal(3, reset = 0), video_pipe_source.data[11:16])),
-            )
-        ]
+            ]
 
         # Underflow.
         self.comb += self.underflow.eq(~source.valid)
@@ -723,9 +727,10 @@ class VideoGenericPHY(Module):
         cbits  = len(pads.r)
         cshift = (8 - cbits)
         for i in range(cbits):
-            self.specials += SDROutput(i=sink.r[cshift + i], o=pads.r[i], clk=ClockSignal(clock_domain))
-            self.specials += SDROutput(i=sink.g[cshift + i], o=pads.g[i], clk=ClockSignal(clock_domain))
-            self.specials += SDROutput(i=sink.b[cshift + i], o=pads.b[i], clk=ClockSignal(clock_domain))
+            # VGA monitors interpret minimum value as black so ensure data is set to 0 during blanking.
+            self.specials += SDROutput(i=sink.r[cshift + i] & sink.de, o=pads.r[i], clk=ClockSignal(clock_domain))
+            self.specials += SDROutput(i=sink.g[cshift + i] & sink.de, o=pads.g[i], clk=ClockSignal(clock_domain))
+            self.specials += SDROutput(i=sink.b[cshift + i] & sink.de, o=pads.b[i], clk=ClockSignal(clock_domain))
 
 # VGA (Generic).
 
@@ -763,15 +768,67 @@ class VideoHDMIPHY(Module):
 
         # # #
 
+        # Determine driven polarities:
+        # - p only for True/Pseudo Differential.
+        # - p and n for Fake Differential.
+        drive_pols = []
+        for pol in ["p", "n"]:
+            if hasattr(pads, f"clk_{pol}"):
+                drive_pols.append(pol)
+
         # Always ack Sink, no backpressure.
         self.comb += sink.ready.eq(1)
 
         # Clocking + Pseudo Differential Signaling.
-        self.specials += DDROutput(i1=1, i2=0, o=pads.clk_p, clk=ClockSignal(clock_domain))
+        for pol in drive_pols:
+            self.specials += DDROutput(
+                i1  = {"p" : 1, "n" : 0}[pol],
+                i2  = {"p" : 0, "n" : 1}[pol],
+                o   = getattr(pads, f"clk_{pol}"),
+                clk = ClockSignal(clock_domain),
+            )
 
         # Encode/Serialize Datas.
-        for color in ["r", "g", "b"]:
+        for pol in drive_pols:
+            for color in ["r", "g", "b"]:
+                # TMDS Encoding.
+                encoder = ClockDomainsRenamer(clock_domain)(TMDSEncoder())
+                setattr(self.submodules, f"{color}_encoder", encoder)
+                self.comb += encoder.d.eq(getattr(sink, color))
+                self.comb += encoder.c.eq(Cat(sink.hsync, sink.vsync) if color == "r" else 0)
+                self.comb += encoder.de.eq(sink.de)
 
+                # 10:1 Serialization + Pseudo Differential Signaling.
+                c2d  = {"r": 0, "g": 1, "b": 2}
+                data_i = encoder.out if color not in pn_swap else ~encoder.out
+                data_o = getattr(pads, f"data{c2d[color]}_{pol}")
+                serializer = VideoHDMI10to1Serializer(
+                    data_i       = {"p":data_i, "n": ~data_i}[pol],
+                    data_o       = data_o,
+                    clock_domain = clock_domain,
+                )
+                setattr(self.submodules, f"{color}_serializer", serializer)
+
+# HDMI (Gowin).
+
+class VideoGowinHDMIPHY(Module):
+    def __init__(self, pads, clock_domain="sys", pn_swap=[]):
+        self.sink = sink = stream.Endpoint(video_data_layout)
+
+        # # #
+
+        # Always ack Sink, no backpressure.
+        self.comb += sink.ready.eq(1)
+
+        # Clocking + Differential Signaling.
+        pix_clk = ClockSignal(clock_domain)
+        self.specials += Instance("ELVDS_OBUF",
+            i_I  = pix_clk if "clk" not in pn_swap else ~pix_clk,
+            o_O  = pads.clk_p,
+            o_OB = pads.clk_n,
+        )
+
+        for color in ["r", "g", "b"]:
             # TMDS Encoding.
             encoder = ClockDomainsRenamer(clock_domain)(TMDSEncoder())
             setattr(self.submodules, f"{color}_encoder", encoder)
@@ -779,15 +836,24 @@ class VideoHDMIPHY(Module):
             self.comb += encoder.c.eq(Cat(sink.hsync, sink.vsync) if color == "r" else 0)
             self.comb += encoder.de.eq(sink.de)
 
-            # 10:1 Serialization + Pseudo Differential Signaling.
-            c2d  = {"r": 0, "g": 1, "b": 2}
-            data = encoder.out if color not in pn_swap else ~encoder.out
-            serializer = VideoHDMI10to1Serializer(
-                data_i       = data,
-                data_o       = getattr(pads, f"data{c2d[color]}_p"),
-                clock_domain = clock_domain,
+            # 10:1 Serialization + Differential Signaling.
+            data_i = encoder.out if color not in pn_swap else ~encoder.out
+            pad_o  = Signal()
+            self.specials += Instance("OSER10",
+                i_PCLK  = pix_clk,
+                i_FCLK  = ClockSignal(clock_domain + "5x"),
+                i_RESET = ResetSignal(clock_domain),
+                **{f"i_D{i}" : data_i[i] for i in range(10)},
+                o_Q     = pad_o,
             )
-            setattr(self.submodules, f"{color}_serializer", serializer)
+
+            c2d  = {"r": 0, "g": 1, "b": 2}
+            self.specials += Instance("ELVDS_OBUF",
+                i_I  = pad_o,
+                o_O  = getattr(pads, f"data{c2d[color]}_p"),
+                o_OB = getattr(pads, f"data{c2d[color]}_n"),
+            )
+
 
 # HDMI (Xilinx Spartan6).
 

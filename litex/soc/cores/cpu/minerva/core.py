@@ -21,6 +21,7 @@ CPU_VARIANTS = ["standard"]
 # Minerva ------------------------------------------------------------------------------------------
 
 class Minerva(CPU):
+    category             = "softcore"
     family               = "riscv"
     name                 = "minerva"
     human_name           = "Minerva"
@@ -30,7 +31,7 @@ class Minerva(CPU):
     gcc_triple           = CPU_GCC_TRIPLE_RISCV32
     linker_output_format = "elf32-littleriscv"
     nop                  = "nop"
-    io_regions           = {0x80000000: 0x80000000} # Origin, Length.
+    io_regions           = {0x8000_0000: 0x8000_0000} # Origin, Length.
 
     # GCC Flags.
     @property
@@ -107,7 +108,7 @@ class Minerva(CPU):
         sdir = get_data_mod("cpu", "minerva").data_location
         if subprocess.call(["python3", os.path.join(sdir, "cli.py"), *cli_params],
             stdout=open(verilog_filename, "w")):
-            raise OSError("Unable to elaborate Minerva CPU, please check your nMigen/Yosys install")
+            raise OSError("Unable to elaborate Minerva CPU, please check your Amaranth/Yosys install")
 
     def do_finalize(self):
         assert hasattr(self, "reset_address")

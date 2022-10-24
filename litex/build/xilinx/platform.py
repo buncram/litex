@@ -26,12 +26,12 @@ class XilinxPlatform(GenericPlatform):
         elif toolchain == "vivado":
             from litex.build.xilinx import vivado
             self.toolchain = vivado.XilinxVivadoToolchain()
-        elif toolchain == "symbiflow":
-            from litex.build.xilinx import symbiflow
-            self.toolchain = symbiflow.SymbiflowToolchain()
+        elif toolchain == "symbiflow" or toolchain == "f4pga":
+            from litex.build.xilinx import f4pga
+            self.toolchain = f4pga.F4PGAToolchain()
         elif toolchain == "yosys+nextpnr":
             from litex.build.xilinx import yosys_nextpnr
-            self.toolchain = yosys_nextpnr.YosysNextpnrToolchain()
+            self.toolchain = yosys_nextpnr.XilinxYosysNextpnrToolchain()
         else:
             raise ValueError(f"Unknown toolchain {toolchain}")
 
@@ -44,7 +44,7 @@ class XilinxPlatform(GenericPlatform):
     def add_platform_command(self, command, **signals):
         skip = False
         from litex.build.xilinx import yosys_nextpnr
-        if isinstance(self.toolchain, yosys_nextpnr.YosysNextpnrToolchain):
+        if isinstance(self.toolchain, yosys_nextpnr.XilinxYosysNextpnrToolchain):
             # FIXME: Add support for INTERNAL_VREF to yosys+nextpnr flow.
             if "set_property INTERNAL_VREF" in command:
                 print("WARNING: INTERNAL_VREF constraint removed since not yet supported by yosys-nextpnr flow.")

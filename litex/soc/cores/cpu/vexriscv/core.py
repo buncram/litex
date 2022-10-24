@@ -46,30 +46,30 @@ CPU_VARIANTS = {
 # GCC Flags ----------------------------------------------------------------------------------------
 
 GCC_FLAGS = {
-    #                               /-------- Base ISA
-    #                               |/------- Hardware Multiply + Divide
-    #                               ||/----- Atomics
-    #                               |||/---- Compressed ISA
-    #                               ||||/--- Single-Precision Floating-Point
-    #                               |||||/-- Double-Precision Floating-Point
-    #                               imacfd
-    "minimal":          "-march=rv32i      -mabi=ilp32",
-    "minimal+debug":    "-march=rv32i      -mabi=ilp32",
-    "lite":             "-march=rv32im     -mabi=ilp32",
-    "lite+debug":       "-march=rv32im     -mabi=ilp32",
-    "standard":         "-march=rv32im     -mabi=ilp32",
-    "standard+debug":   "-march=rv32im     -mabi=ilp32",
-    "imac":             "-march=rv32imac   -mabi=ilp32",
-    "imac+debug":       "-march=rv32imac   -mabi=ilp32",
-    "full":             "-march=rv32im     -mabi=ilp32",
-    "full+cfu":         "-march=rv32im     -mabi=ilp32",
-    "full+debug":       "-march=rv32im     -mabi=ilp32",
-    "full+cfu+debug":   "-march=rv32im     -mabi=ilp32",
-    "linux":            "-march=rv32ima    -mabi=ilp32",
-    "linux+debug":      "-march=rv32ima    -mabi=ilp32",
-    "linux+no-dsp":     "-march=rv32ima    -mabi=ilp32",
-    "secure":           "-march=rv32ima    -mabi=ilp32",
-    "secure+debug":     "-march=rv32ima    -mabi=ilp32",
+    #                               /---------- Base ISA
+    #                               |    /----- Hardware Multiply + Divide
+    #                               |    |/---- Atomics
+    #                               |    ||/--- Compressed ISA
+    #                               |    |||/-- Single-Precision Floating-Point
+    #                               |    ||||/- Double-Precision Floating-Point
+    #                               i    macfd
+    "minimal":          "-march=rv32i2p0       -mabi=ilp32",
+    "minimal+debug":    "-march=rv32i2p0       -mabi=ilp32",
+    "lite":             "-march=rv32i2p0_m     -mabi=ilp32",
+    "lite+debug":       "-march=rv32i2p0_m     -mabi=ilp32",
+    "standard":         "-march=rv32i2p0_m     -mabi=ilp32",
+    "standard+debug":   "-march=rv32i2p0_m     -mabi=ilp32",
+    "imac":             "-march=rv32i2p0_mac   -mabi=ilp32",
+    "imac+debug":       "-march=rv32i2p0_mac   -mabi=ilp32",
+    "full":             "-march=rv32i2p0_m     -mabi=ilp32",
+    "full+cfu":         "-march=rv32i2p0_m     -mabi=ilp32",
+    "full+debug":       "-march=rv32i2p0_m     -mabi=ilp32",
+    "full+cfu+debug":   "-march=rv32i2p0_m     -mabi=ilp32",
+    "linux":            "-march=rv32i2p0_ma    -mabi=ilp32",
+    "linux+debug":      "-march=rv32i2p0_ma    -mabi=ilp32",
+    "linux+no-dsp":     "-march=rv32i2p0_ma    -mabi=ilp32",
+    "secure":           "-march=rv32i2p0_ma    -mabi=ilp32",
+    "secure+debug":     "-march=rv32i2p0_ma    -mabi=ilp32",
 }
 
 # VexRiscv Timer -----------------------------------------------------------------------------------
@@ -95,6 +95,7 @@ class VexRiscvTimer(Module, AutoCSR):
 # VexRiscv -----------------------------------------------------------------------------------------
 
 class VexRiscv(CPU, AutoCSR):
+    category             = "softcore"
     family               = "riscv"
     name                 = "vexriscv"
     human_name           = "VexRiscv"
@@ -104,17 +105,17 @@ class VexRiscv(CPU, AutoCSR):
     gcc_triple           = CPU_GCC_TRIPLE_RISCV32
     linker_output_format = "elf32-littleriscv"
     nop                  = "nop"
-    io_regions           = {0x80000000: 0x80000000} # Origin, Length
+    io_regions           = {0x8000_0000: 0x8000_0000} # Origin, Length
 
     # Memory Mapping.
     @property
     def mem_map(self):
         return {
-            "rom":            0x00000000,
-            "sram":           0x10000000,
-            "main_ram":       0x40000000,
-            "csr":            0xf0000000,
-            "vexriscv_debug": 0xf00f0000,
+            "rom":            0x0000_0000,
+            "sram":           0x1000_0000,
+            "main_ram":       0x4000_0000,
+            "csr":            0xf000_0000,
+            "vexriscv_debug": 0xf00f_0000,
         }
 
     # GCC Flags.

@@ -530,6 +530,7 @@ static void netboot_from_json(const char * filename, unsigned int ip, unsigned s
 		boot(boot_r1, boot_r2, boot_r3, boot_addr);
 }
 
+#ifdef MAIN_RAM_BASE
 static void netboot_from_bin(const char * filename, unsigned int ip, unsigned short tftp_port)
 {
 	int size;
@@ -538,6 +539,7 @@ static void netboot_from_bin(const char * filename, unsigned int ip, unsigned sh
 		return;
 	boot(0, 0, 0, MAIN_RAM_BASE);
 }
+#endif
 
 void netboot(int nb_params, char **params)
 {
@@ -563,9 +565,11 @@ void netboot(int nb_params, char **params)
 		printf("Booting from boot.json...\n");
 		netboot_from_json("boot.json", ip, TFTP_SERVER_PORT);
 
+#ifdef MAIN_RAM_BASE
 		/* Boot from boot.bin */
 		printf("Booting from boot.bin...\n");
 		netboot_from_bin("boot.bin", ip, TFTP_SERVER_PORT);
+#endif
 	}
 
 	/* Boot failed if we are here... */
@@ -800,6 +804,7 @@ static void sdcardboot_from_json(const char * filename)
 		boot(boot_r1, boot_r2, boot_r3, boot_addr);
 }
 
+#ifdef MAIN_RAM_BASE
 static void sdcardboot_from_bin(const char * filename)
 {
 	uint32_t result;
@@ -808,6 +813,7 @@ static void sdcardboot_from_bin(const char * filename)
 		return;
 	boot(0, 0, 0, MAIN_RAM_BASE);
 }
+#endif
 
 void sdcardboot(void)
 {
@@ -824,9 +830,11 @@ void sdcardboot(void)
 	printf("Booting from boot.json...\n");
 	sdcardboot_from_json("boot.json");
 
+#ifdef MAIN_RAM_BASE
 	/* Boot from boot.bin */
 	printf("Booting from boot.bin...\n");
 	sdcardboot_from_bin("boot.bin");
+#endif
 
 	/* Boot failed if we are here... */
 	printf("SDCard boot failed.\n");

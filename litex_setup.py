@@ -57,57 +57,77 @@ class SetupError(Exception):
 # Get SHA1: git rev-parse --short=7 HEAD
 
 class GitRepo:
-    def __init__(self, url, clone="regular", develop=True, sha1=None, branch="master"):
+    def __init__(self, url, clone="regular", develop=True, sha1=None, branch="master", tag=None):
         assert clone in ["regular", "recursive"]
         self.url     = url
         self.clone   = clone
         self.develop = develop
         self.sha1    = sha1
         self.branch  = branch
+        self.tag     = tag
+
 
 git_repos = {
     # HDL.
+    # ----
     "migen":    GitRepo(url="https://github.com/m-labs/", clone="recursive"),
-    "amaranth": GitRepo(url="https://github.com/amaranth-lang/", branch="main"),
 
-    # LiteX SoC builder
+    # LiteX SoC builder.
+    # ------------------
     "pythondata-software-picolibc":    GitRepo(url="https://github.com/litex-hub/", clone="recursive"),
     "pythondata-software-compiler_rt": GitRepo(url="https://github.com/litex-hub/"),
-    "litex":                           GitRepo(url="https://github.com/enjoy-digital/"),
+    "litex":                           GitRepo(url="https://github.com/enjoy-digital/", tag=True),
 
     # LiteX Cores Ecosystem.
-    "liteeth":      GitRepo(url="https://github.com/enjoy-digital/"),
-    "litedram":     GitRepo(url="https://github.com/enjoy-digital/"),
-    "litepcie":     GitRepo(url="https://github.com/enjoy-digital/"),
-    "litesata":     GitRepo(url="https://github.com/enjoy-digital/"),
-    "litesdcard":   GitRepo(url="https://github.com/enjoy-digital/"),
-    "liteiclink":   GitRepo(url="https://github.com/enjoy-digital/"),
-    "litescope":    GitRepo(url="https://github.com/enjoy-digital/"),
-    "litejesd204b": GitRepo(url="https://github.com/enjoy-digital/"),
-    "litespi":      GitRepo(url="https://github.com/litex-hub/"),
-    "litehyperbus": GitRepo(url="https://github.com/litex-hub/"),
+    # ----------------------
+    "liteeth":      GitRepo(url="https://github.com/enjoy-digital/", tag=True),
+    "litedram":     GitRepo(url="https://github.com/enjoy-digital/", tag=True),
+    "litepcie":     GitRepo(url="https://github.com/enjoy-digital/", tag=True),
+    "litesata":     GitRepo(url="https://github.com/enjoy-digital/", tag=True),
+    "litesdcard":   GitRepo(url="https://github.com/enjoy-digital/", tag=True),
+    "liteiclink":   GitRepo(url="https://github.com/enjoy-digital/", tag=True),
+    "litescope":    GitRepo(url="https://github.com/enjoy-digital/", tag=True),
+    "litejesd204b": GitRepo(url="https://github.com/enjoy-digital/", tag=True),
+    "litespi":      GitRepo(url="https://github.com/litex-hub/",     tag=True),
+
+    # LiteX Misc Cores.
+    # -----------------
+    "valentyusb":         GitRepo(url="https://github.com/litex-hub/", branch="hw_cdc_eptri"),
 
     # LiteX Boards.
-    "litex-boards": GitRepo(url="https://github.com/litex-hub/", clone="regular"),
+    # -------------
+    "litex-boards": GitRepo(url="https://github.com/litex-hub/", clone="regular", tag=True),
 
     # LiteX pythondata.
+    # -----------------
+    # Generic.
     "pythondata-misc-tapcfg":      GitRepo(url="https://github.com/litex-hub/"),
     "pythondata-misc-usb_ohci":    GitRepo(url="https://github.com/litex-hub/"),
+
+    # LM32 CPU(s).
     "pythondata-cpu-lm32":         GitRepo(url="https://github.com/litex-hub/"),
+
+    # OpenRISC CPU(s).
     "pythondata-cpu-mor1kx":       GitRepo(url="https://github.com/litex-hub/"),
-    "pythondata-cpu-picorv32":     GitRepo(url="https://github.com/litex-hub/"),
-    "pythondata-cpu-serv":         GitRepo(url="https://github.com/litex-hub/"),
-    "pythondata-cpu-vexriscv":     GitRepo(url="https://github.com/litex-hub/"),
-    "pythondata-cpu-vexriscv-smp": GitRepo(url="https://github.com/litex-hub/", clone="recursive"),
-    "pythondata-cpu-naxriscv":     GitRepo(url="https://github.com/litex-hub/"),
-    "pythondata-cpu-rocket":       GitRepo(url="https://github.com/litex-hub/"),
-    "pythondata-cpu-minerva":      GitRepo(url="https://github.com/litex-hub/"),
+    "pythondata-cpu-marocchino":   GitRepo(url="https://github.com/litex-hub/"),
+
+    # OpenPower CPU(s).
     "pythondata-cpu-microwatt":    GitRepo(url="https://github.com/litex-hub/", sha1=0xb940b55acff),
+
+    # RISC-V CPU(s).
     "pythondata-cpu-blackparrot":  GitRepo(url="https://github.com/litex-hub/"),
     "pythondata-cpu-cv32e40p":     GitRepo(url="https://github.com/litex-hub/", clone="recursive"),
     "pythondata-cpu-cv32e41p":     GitRepo(url="https://github.com/litex-hub/", clone="recursive"),
+    "pythondata-cpu-cva5":         GitRepo(url="https://github.com/litex-hub/"),
+    "pythondata-cpu-cva6":         GitRepo(url="https://github.com/litex-hub/", clone="recursive"),
     "pythondata-cpu-ibex":         GitRepo(url="https://github.com/litex-hub/", clone="recursive", sha1=0xd3d53df),
-    "pythondata-cpu-marocchino":   GitRepo(url="https://github.com/litex-hub/"),
+    "pythondata-cpu-minerva":      GitRepo(url="https://github.com/litex-hub/"),
+    "pythondata-cpu-naxriscv":     GitRepo(url="https://github.com/litex-hub/"),
+    "pythondata-cpu-picorv32":     GitRepo(url="https://github.com/litex-hub/"),
+    "pythondata-cpu-rocket":       GitRepo(url="https://github.com/litex-hub/"),
+    "pythondata-cpu-serv":         GitRepo(url="https://github.com/litex-hub/"),
+    "pythondata-cpu-vexriscv":     GitRepo(url="https://github.com/litex-hub/"),
+    "pythondata-cpu-vexriscv-smp": GitRepo(url="https://github.com/litex-hub/", clone="recursive"),
 }
 
 # Installs -----------------------------------------------------------------------------------------
@@ -117,20 +137,20 @@ minimal_repos = ["migen", "litex"]
 
 # Standard: Migen + LiteX + Cores + Software + Popular CPUs (LM32, Mor1kx, SERV, VexRiscv).
 standard_repos = list(git_repos.keys())
-standard_repos.remove("amaranth")
-standard_repos.remove("pythondata-cpu-picorv32")
-standard_repos.remove("pythondata-cpu-rocket")
-standard_repos.remove("pythondata-cpu-minerva")
-standard_repos.remove("pythondata-cpu-microwatt")
 standard_repos.remove("pythondata-cpu-blackparrot")
 standard_repos.remove("pythondata-cpu-cv32e40p")
 standard_repos.remove("pythondata-cpu-cv32e41p")
+standard_repos.remove("pythondata-cpu-cva5")
+standard_repos.remove("pythondata-cpu-cva6")
 standard_repos.remove("pythondata-cpu-ibex")
 standard_repos.remove("pythondata-cpu-marocchino")
+standard_repos.remove("pythondata-cpu-minerva")
+standard_repos.remove("pythondata-cpu-microwatt")
+standard_repos.remove("pythondata-cpu-picorv32")
+standard_repos.remove("pythondata-cpu-rocket")
 
 # Full: Migen + LiteX + Cores + Software + All CPUs.
 full_repos = list(git_repos.keys())
-
 
 # Installs:
 install_configs = {
@@ -166,9 +186,20 @@ def litex_setup_auto_update():
     except:
         pass
 
+# Git helpers --------------------------------------------------------------------------------------
+
+def git_checkout(sha1=None, tag=None):
+    assert not ((sha1 is None) and (tag is None))
+    if sha1 is not None:
+        os.system(f"git checkout {sha1:07x}")
+    if tag is not None:
+        sha1_tag_cmd = ["git", "rev-list", "-n 1", tag]
+        sha1_tag     = subprocess.check_output(sha1_tag_cmd).decode("UTF-8")[:-1]
+        os.system(f"git checkout {sha1_tag}")
+
 # Git repositories initialization ------------------------------------------------------------------
 
-def litex_setup_init_repos(config="standard", dev_mode=False):
+def litex_setup_init_repos(config="standard", tag=None, dev_mode=False):
     print_status("Initializing Git repositories...", underline=True)
     for name in install_configs[config]:
         repo = git_repos[name]
@@ -183,16 +214,28 @@ def litex_setup_init_repos(config="standard", dev_mode=False):
                 url     = repo_url + name + ".git",
                 options = "--recursive" if repo.clone == "recursive" else ""
                 ), shell=True)
+            os.chdir(os.path.join(current_path, name))
+            # Use specific Branch.
+            subprocess.check_call("git checkout " + repo.branch, shell=True)
+            # Use specific Tag (Optional).
+            if repo.tag is not None:
+                # Priority to passed tag (if specified).
+                if tag is not None:
+                    git_checkout(tag=tag)
+                    continue
+                # Else fallback to repo tag (if specified).
+                if isinstance(repo.tag, str):
+                    git_checkout(tag=tag)
+                    continue
             # Use specific SHA1 (Optional).
             if repo.sha1 is not None:
-                os.chdir(os.path.join(current_path, name))
-                os.system(f"git checkout {repo.sha1:07x}")
+                git_checkout(sha1=repo.sha1)
         else:
             print_status(f"{name} Git Repo already present.")
 
 # Git repositories update --------------------------------------------------------------------------
 
-def litex_setup_update_repos(config="standard"):
+def litex_setup_update_repos(config="standard", tag=None):
     print_status("Updating Git repositories...", underline=True)
     for name in install_configs[config]:
         repo = git_repos[name]
@@ -209,10 +252,19 @@ def litex_setup_update_repos(config="standard"):
         # Recursive Update (Optional).
         if repo.clone == "recursive":
             subprocess.check_call("git submodule update --init --recursive", shell=True)
+        # Use specific Tag (Optional).
+        if repo.tag is not None:
+            # Priority to passed tag (if specified).
+            if tag is not None:
+                git_checkout(tag=tag)
+                continue
+            # Else fallback to repo tag (if specified).
+            if isinstance(repo.tag, str):
+                git_checkout(tag=tag)
+                continue
         # Use specific SHA1 (Optional).
         if repo.sha1 is not None:
-            os.chdir(os.path.join(current_path, name))
-            os.system(f"git checkout {repo.sha1:07x}")
+            git_checkout(sha1=repo.sha1)
 
 # Git repositories install -------------------------------------------------------------------------
 
@@ -225,7 +277,7 @@ def litex_setup_install_repos(config="standard", user_mode=False):
         if repo.develop:
             print_status(f"Installing {name} Git repository...")
             os.chdir(os.path.join(current_path, name))
-            subprocess.check_call("{python3} setup.py develop {options}".format(
+            subprocess.check_call("\"{python3}\" -m pip install --editable . {options}".format(
                 python3 = sys.executable,
                 options = "--user" if user_mode else "",
                 ), shell=True)
@@ -234,16 +286,28 @@ def litex_setup_install_repos(config="standard", user_mode=False):
             print_status("Make sure that ~/.local/bin is in your PATH")
             print_status("export PATH=$PATH:~/.local/bin")
 
-# Git repositories status --------------------------------------------------------------------------
+# Git repositories freeze --------------------------------------------------------------------------
 
-def litex_setup_status_repos(config="standard"):
-    print_status("Getting status of Git repositories...", underline=True)
+def litex_setup_freeze_repos(config="standard"):
+    print_status("Freezing config of Git repositories...", underline=True)
+    r = "git_repos = {\n"
     for name in install_configs[config]:
         repo = git_repos[name]
         os.chdir(os.path.join(current_path, name))
         git_sha1_cmd = ["git", "rev-parse", "--short=7", "HEAD"]
-        git_sha1     = subprocess.check_output(git_sha1_cmd).decode("UTF-8")
-        print(f"{name}: sha1=0x{git_sha1}", end="")
+        git_sha1     = subprocess.check_output(git_sha1_cmd).decode("UTF-8")[:-1]
+        git_url_cmd  = ["git", "remote", "get-url", "origin"]
+        git_url      = subprocess.check_output(git_url_cmd).decode("UTF-8")[:-1]
+        git_url      = git_url.replace(f"{name}.git", "")
+        r += " "*4
+        r += f'"{name}" : GitRepo(url="{git_url}",\n'
+        r += f'{" "*8}clone   = "{repo.clone}",\n'
+        r += f'{" "*8}develop = {repo.develop},\n'
+        r += f'{" "*8}sha1    = 0x{git_sha1},\n'
+        r += f'{" "*8}branch  = "{repo.branch}"'
+        r += f'\n{" "*4}),\n'
+    r += "}\n"
+    print(r)
 
 # GCC toolchains download --------------------------------------------------------------------------
 
@@ -263,8 +327,8 @@ def gcc_toolchain_download(url, filename):
 # -----------------
 
 def riscv_gcc_toolchain_download():
-    base_url  = "https://static.dev.sifive.com/dev-tools/"
-    base_file = "riscv64-unknown-elf-gcc-8.3.0-2019.08.0-x86_64-"
+    base_url  = "https://static.dev.sifive.com/dev-tools/freedom-tools/v2020.08/"
+    base_file = "riscv64-unknown-elf-gcc-10.1.0-2020.08.2-x86_64-"
 
     # Windows
     if (sys.platform.startswith("win") or sys.platform.startswith("cygwin")):
@@ -326,7 +390,9 @@ def main():
     parser.add_argument("--install",   action="store_true", help="Install Git repositories.")
     parser.add_argument("--user",      action="store_true", help="Install in User-Mode.")
     parser.add_argument("--config",    default="standard",  help="Install config (minimal, standard, full).")
-    parser.add_argument("--status",    action="store_true", help="Display Git status of repositories.")
+    parser.add_argument("--tag",       default=None,        help="Use version from release tag.")
+    parser.add_argument("--freeze",    action="store_true", help="Freeze and display current config.")
+
 
     # GCC toolchains.
     parser.add_argument("--gcc", default=None, help="Download/Extract GCC Toolchain (riscv, powerpc, openrisc or lm32).")
@@ -353,19 +419,19 @@ def main():
 
     # Init.
     if args.init:
-        litex_setup_init_repos(config=args.config, dev_mode=args.dev)
+        litex_setup_init_repos(config=args.config, tag=args.tag, dev_mode=args.dev)
 
     # Update.
     if args.update:
-        litex_setup_update_repos(config=args.config)
+        litex_setup_update_repos(config=args.config, tag=args.tag)
 
     # Install.
     if args.install:
         litex_setup_install_repos(config=args.config, user_mode=args.user)
 
-    # Status.
-    if args.status:
-        litex_setup_status_repos(config=args.config)
+    # Freeze.
+    if args.freeze:
+        litex_setup_freeze_repos(config=args.config)
 
     # GCC.
     os.chdir(os.path.join(current_path))

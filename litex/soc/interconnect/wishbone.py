@@ -4,6 +4,7 @@
 # Copyright (c) 2015 Sebastien Bourdeauducq <sb@m-labs.hk>
 # Copyright (c) 2015-2020 Florent Kermarrec <florent@enjoy-digital.fr>
 # Copyright (c) 2018 Tim 'mithro' Ansell <me@mith.ro>
+# Copytight (c) 2022 Antmicro <www.antmicro.com>
 # SPDX-License-Identifier: BSD-2-Clause
 
 """Wishbone Classic support for LiteX (Standard HandShaking/Synchronous Feedback)"""
@@ -38,11 +39,17 @@ _layout = [
     ("err",              1, DIR_S_TO_M)
 ]
 
+CTI_BURST_NONE         = 0b000
+CTI_BURST_CONSTANT     = 0b001
+CTI_BURST_INCREMENTING = 0b010
+CTI_BURST_END          = 0b111
+
 
 class Interface(Record):
-    def __init__(self, data_width=32, adr_width=30):
+    def __init__(self, data_width=32, adr_width=30, bursting=False):
         self.data_width = data_width
         self.adr_width  = adr_width
+        self.bursting   = bursting
         Record.__init__(self, set_layout_parameters(_layout,
             adr_width  = adr_width,
             data_width = data_width,
@@ -65,18 +72,26 @@ class Interface(Record):
         yield self.cyc.eq(0)
         yield self.stb.eq(0)
 
-    def write(self, adr, dat, sel=None):
+    def write(self, adr, dat, sel=None, cti=None, bte=None):
         if sel is None:
             sel = 2**len(self.sel) - 1
         yield self.adr.eq(adr)
         yield self.dat_w.eq(dat)
         yield self.sel.eq(sel)
+        if cti is not None:
+            yield self.cti.eq(cti)
+        if bte is not None:
+            yield self.bte.eq(bte)
         yield self.we.eq(1)
         yield from self._do_transaction()
 
-    def read(self, adr):
+    def read(self, adr, cti=None, bte=None):
         yield self.adr.eq(adr)
         yield self.we.eq(0)
+        if cti is not None:
+            yield self.cti.eq(cti)
+        if bte is not None:
+            yield self.bte.eq(bte)
         yield from self._do_transaction()
         return (yield self.dat_r)
 
@@ -208,7 +223,7 @@ class InterconnectShared(Module):
 
 
 class Crossbar(Module):
-    def __init__(self, masters, slaves, register=False):
+    def __init__(self, masters, slaves, register=False, timeout_cycles=1e6):
         matches, busses = zip(*slaves)
         access = [[Interface() for j in slaves] for i in masters]
         # decode each master into its access row
@@ -242,42 +257,40 @@ class DownConverter(Module):
 
         # # #
 
-        skip    = Signal()
-        counter = Signal(max=ratio)
+        skip  = Signal()
+        done  = Signal()
+        count = Signal(max=ratio)
 
-        # Control Path
-        fsm = FSM(reset_state="IDLE")
-        fsm = ResetInserter()(fsm)
-        self.submodules.fsm = fsm
-        self.comb += fsm.reset.eq(~master.cyc)
-        fsm.act("IDLE",
-            NextValue(counter, 0),
-            If(master.stb & master.cyc,
-                NextState("CONVERT"),
-            )
-        )
-        fsm.act("CONVERT",
-            slave.adr.eq(Cat(counter, master.adr)),
-            Case(counter, {i: slave.sel.eq(master.sel[i*dw_to//8:]) for i in range(ratio)}),
+        # Control Path.
+        self.comb += [
+            done.eq(count == (ratio - 1)),
             If(master.stb & master.cyc,
                 skip.eq(slave.sel == 0),
-                slave.we.eq(master.we),
                 slave.cyc.eq(~skip),
                 slave.stb.eq(~skip),
+                slave.we.eq(master.we),
                 If(slave.ack | skip,
-                    NextValue(counter, counter + 1),
-                    If(counter == (ratio - 1),
-                        master.ack.eq(1),
-                        NextState("IDLE")
-                    )
+                    master.ack.eq(done)
                 )
             )
-        )
+        ]
+        self.sync += [
+            If((slave.stb & slave.cyc & slave.ack) | skip,
+                count.eq(count + 1)
+            ),
+            If(master.ack | ~master.cyc,
+                count.eq(0)
+            )
+        ]
 
-        # Write Datapath
-        self.comb += Case(counter, {i: slave.dat_w.eq(master.dat_w[i*dw_to:]) for i in range(ratio)})
+        # Address.
+        self.comb += slave.adr.eq(Cat(count, master.adr))
 
-        # Read Datapath
+        # Write Datapath.
+        self.comb += Case(count, {i: slave.dat_w.eq(master.dat_w[i*dw_to:]) for i in range(ratio)})
+        self.comb += Case(count, {i: slave.sel.eq(master.sel[i*dw_to//8:])  for i in range(ratio)}),
+
+        # Read Datapath.
         dat_r = Signal(dw_from, reset_less=True)
         self.comb += master.dat_r.eq(Cat(dat_r[dw_to:], slave.dat_r))
         self.sync += If(slave.ack | skip, dat_r.eq(master.dat_r))
@@ -329,7 +342,7 @@ class Converter(Module):
 # Wishbone SRAM ------------------------------------------------------------------------------------
 
 class SRAM(Module):
-    def __init__(self, mem_or_size, read_only=None, init=None, bus=None):
+    def __init__(self, mem_or_size, read_only=None, init=None, bus=None, name=None):
         if bus is None:
             bus = Interface()
         self.bus = bus
@@ -338,7 +351,7 @@ class SRAM(Module):
             assert(mem_or_size.width <= bus_data_width)
             self.mem = mem_or_size
         else:
-            self.mem = Memory(bus_data_width, mem_or_size//(bus_data_width//8), init=init)
+            self.mem = Memory(bus_data_width, mem_or_size//(bus_data_width//8), init=init, name=name)
 
         if read_only is None:
             if hasattr(self.mem, "bus_read_only"):
@@ -346,27 +359,105 @@ class SRAM(Module):
             else:
                 read_only = False
 
-        ###
+        # # #
 
-        # memory
+        adr_burst = Signal()
+
+        # Burst support.
+        # --------------
+
+        if self.bus.bursting:
+            adr_wrap_mask = Array((0b0000, 0b0011, 0b0111, 0b1111))
+            adr_wrap_max  = adr_wrap_mask[-1].bit_length()
+
+            adr_burst_wrap = Signal()
+            adr_latched    = Signal()
+
+            adr_counter        = Signal(len(self.bus.adr))
+            adr_counter_base   = Signal(len(self.bus.adr))
+            adr_counter_offset = Signal(adr_wrap_max)
+            adr_offset_lsb     = Signal(adr_wrap_max)
+            adr_offset_msb     = Signal(len(self.bus.adr))
+
+            adr_next = Signal(len(self.bus.adr))
+
+            # Only Incrementing Burts are supported.
+            self.comb += [
+                Case(self.bus.cti, {
+                    # incrementing address burst cycle
+                    CTI_BURST_INCREMENTING: adr_burst.eq(1),
+                    # end current burst cycle
+                    CTI_BURST_END: adr_burst.eq(0),
+                    # unsupported burst cycle
+                    "default": adr_burst.eq(0)
+                }),
+                adr_burst_wrap.eq(self.bus.bte[0] | self.bus.bte[1]),
+                adr_counter_base.eq(
+                    Cat(self.bus.adr & ~adr_wrap_mask[self.bus.bte],
+                       self.bus.adr[adr_wrap_max:]
+                    )
+                )
+            ]
+
+            # Latch initial address (without wrapping bits and wrap offset).
+            self.sync += [
+                If(self.bus.cyc & self.bus.stb & adr_burst,
+                    adr_latched.eq(1),
+                    # Latch initial address, then increment it every clock cycle
+                    If(adr_latched,
+                        adr_counter.eq(adr_counter + 1)
+                    ).Else(
+                        adr_counter_offset.eq(self.bus.adr & adr_wrap_mask[self.bus.bte]),
+                        adr_counter.eq(adr_counter_base +
+                            Cat(~self.bus.we, Replicate(0, len(adr_counter)-1))
+                        )
+                    ),
+                    If(self.bus.cti == CTI_BURST_END,
+                        adr_latched.eq(0),
+                        adr_counter.eq(0),
+                        adr_counter_offset.eq(0)
+                    )
+                ).Else(
+                    adr_latched.eq(0),
+                    adr_counter.eq(0),
+                    adr_counter_offset.eq(0)
+                ),
+            ]
+
+            # Next Address = counter value without wrapped bits + wrapped counter bits with offset.
+            self.comb += [
+                adr_offset_lsb.eq((adr_counter + adr_counter_offset) & adr_wrap_mask[self.bus.bte]),
+                adr_offset_msb.eq(adr_counter & ~adr_wrap_mask[self.bus.bte]),
+                adr_next.eq(adr_offset_msb + adr_offset_lsb)
+            ]
+
+        # # #
+
+        # Memory.
+        # -------
         port = self.mem.get_port(write_capable=not read_only, we_granularity=8,
             mode=READ_FIRST if read_only else WRITE_FIRST)
         self.specials += self.mem, port
-        # generate write enable signal
+        # Generate write enable signal
         if not read_only:
             self.comb += [port.we[i].eq(self.bus.cyc & self.bus.stb & self.bus.we & self.bus.sel[i])
                 for i in range(bus_data_width//8)]
-        # address and data
+        # Address and data
+        self.comb += port.adr.eq(self.bus.adr[:len(port.adr)])
+        if self.bus.bursting:
+            self.comb += If(adr_burst & adr_latched,
+                port.adr.eq(adr_next[:len(port.adr)]),
+            )
         self.comb += [
-            port.adr.eq(self.bus.adr[:len(port.adr)]),
             self.bus.dat_r.eq(port.dat_r)
         ]
         if not read_only:
             self.comb += port.dat_w.eq(self.bus.dat_w),
-        # generate ack
+
+        # Generate Ack.
         self.sync += [
             self.bus.ack.eq(0),
-            If(self.bus.cyc & self.bus.stb & ~self.bus.ack, self.bus.ack.eq(1))
+            If(self.bus.cyc & self.bus.stb & (~self.bus.ack | adr_burst), self.bus.ack.eq(1))
         ]
 
 # Wishbone To CSR ----------------------------------------------------------------------------------

@@ -36,12 +36,32 @@ class InterfaceWriter:
         self.efinity_path = efinity_path
         self.blocks       = []
         self.xml_blocks   = []
+        self.fix_xml      = []
         self.filename     = ""
         self.platform     = None
 
     def set_build_params(self, platform, build_name):
         self.filename = build_name
         self.platform = platform
+
+    def fix_xml_values(self):
+        et.register_namespace("efxpt", "http://www.efinixinc.com/peri_design_db")
+        tree = et.parse(self.filename + ".peri.xml")
+        root = tree.getroot()
+        for tag, name, values in self.fix_xml:
+            for e in tree.iter():
+                if (tag in e.tag) and (name == e.get("name")):
+                    for n, v in values:
+                        e.set(n, v)
+
+        xml_string = et.tostring(root, "utf-8")
+        reparsed = expatbuilder.parseString(xml_string, False)
+        print_string = reparsed.toprettyxml(indent="    ")
+
+        # Remove lines with only whitespaces. Not sure why they are here
+        print_string = os.linesep.join([s for s in print_string.splitlines() if s.strip()])
+
+        tools.write_to_file("{}.peri.xml".format(self.filename), print_string)
 
     def generate_xml_blocks(self):
         et.register_namespace("efxpt", "http://www.efinixinc.com/peri_design_db")
@@ -105,6 +125,31 @@ design.create("{2}", "{3}", "./../gateware", overwrite=True)
                 return b
         return None
 
+    def generate_mipi_tx(self, block, verbose=True):
+        name = block["name"]
+        cmd = "# ---------- MIPI TX {} ---------\n".format(name)
+        cmd += f'design.create_block("{name}","MIPI_TX_LANE", mode="{block["mode"]}")\n'
+        for p, v in block["props"].items():
+            cmd += f'design.set_property("{name}","{p}","{v}","MIPI_TX_LANE")\n'
+        cmd += f'design.assign_resource("{name}","{block["ressource"]}","MIPI_TX_LANE")\n'
+        cmd += "# ---------- END MIPI TX {} ---------\n\n".format(name)
+        return cmd
+
+    def generate_mipi_rx(self, block, verbose=True):
+        name = block["name"]
+
+        conn_type = ""
+        if "conn_type" in block:
+            conn_type = f', conn_type="{block["conn_type"]}"'
+
+        cmd = "# ---------- MIPI RX {} ---------\n".format(name)
+        cmd += f'design.create_block("{name}","MIPI_RX_LANE", mode="{block["mode"]}"' + conn_type + ')\n'
+        for p, v in block["props"].items():
+            cmd += f'design.set_property("{name}","{p}","{v}","MIPI_RX_LANE")\n'
+        cmd += f'design.assign_resource("{name}","{block["ressource"]}","MIPI_RX_LANE")\n'
+        cmd += "# ---------- END MIPI RX {} ---------\n\n".format(name)
+        return cmd
+
     def generate_gpio(self, block, verbose=True):
         name = block["name"]
         mode = block["mode"]
@@ -119,6 +164,31 @@ design.create("{2}", "{3}", "./../gateware", overwrite=True)
                 cmd += f'design.create_inout_gpio("{name}",{block["size"]-1},0)\n'
                 for i, pad in enumerate(block["location"]):
                     cmd += f'design.assign_pkg_pin("{name}[{i}]","{pad}")\n'
+
+            if "out_reg" in block:
+                cmd += f'design.set_property("{name}","OUT_REG","{block["out_reg"]}")\n'
+                cmd += f'design.set_property("{name}","OUT_CLK_PIN","{block["out_clk_pin"]}")\n'
+                if "out_delay" in block:
+                    cmd += f'design.set_property("{name}","OUTDELAY","{block["out_delay"]}")\n'
+
+            if "out_clk_inv" in block:
+                cmd += f'design.set_property("{name}","IS_OUTCLK_INVERTED","{block["out_clk_inv"]}")\n'
+                cmd += f'design.set_property("{name}","OE_CLK_PIN_INV","{block["out_clk_inv"]}")\n'
+
+            if "in_reg" in block:
+                cmd += f'design.set_property("{name}","IN_REG","{block["in_reg"]}")\n'
+                cmd += f'design.set_property("{name}","IN_CLK_PIN","{block["in_clk_pin"]}")\n'
+                if "in_delay" in block:
+                    cmd += f'design.set_property("{name}","INDELAY","{block["in_delay"]}")\n'
+
+            if "in_clk_inv" in block:
+                cmd += f'design.set_property("{name}","IS_INCLK_INVERTED","{block["in_clk_inv"]}")\n'
+
+            if "oe_reg" in block:
+                cmd += f'design.set_property("{name}","OE_REG","{block["oe_reg"]}")\n'
+            if "oe_clk_pin" in block:
+                cmd += f'design.set_property("{name}","OE_CLK_PIN","{block["oe_clk_pin"]}")\n'
+
             if prop:
                 for p, val in prop:
                     cmd += 'design.set_property("{}","{}","{}")\n'.format(name, p, val)
@@ -136,6 +206,8 @@ design.create("{2}", "{3}", "./../gateware", overwrite=True)
             if "in_reg" in block:
                 cmd += f'design.set_property("{name}","IN_REG","{block["in_reg"]}")\n'
                 cmd += f'design.set_property("{name}","IN_CLK_PIN","{block["in_clk_pin"]}")\n'
+                if "in_delay" in block:
+                    cmd += f'design.set_property("{name}","INDELAY","{block["in_delay"]}")\n'
             if prop:
                 for p, val in prop:
                     cmd += 'design.set_property("{}","{}","{}")\n'.format(name, p, val)
@@ -154,6 +226,12 @@ design.create("{2}", "{3}", "./../gateware", overwrite=True)
             if "out_reg" in block:
                 cmd += 'design.set_property("{}","OUT_REG","{}")\n'.format(name, block["out_reg"])
                 cmd += 'design.set_property("{}","OUT_CLK_PIN","{}")\n'.format(name, block["out_clk_pin"])
+                if "out_delay" in block:
+                    cmd += 'design.set_property("{}","OUTDELAY","{}")\n'.format(name, block["out_delay"])
+
+            if "out_clk_inv" in block:
+                cmd += f'design.set_property("{name}","IS_OUTCLK_INVERTED","{block["out_clk_inv"]}")\n'
+                cmd += f'design.set_property("{name}","OE_CLK_PIN_INV","{block["out_clk_inv"]}")\n'
 
             if "drive_strength" in block:
                 cmd += 'design.set_property("{}","DRIVE_STRENGTH","4")\n'.format(name, block["drive_strength"])
@@ -228,7 +306,7 @@ design.create("{2}", "{3}", "./../gateware", overwrite=True)
             if block["version"] == "V1_V2":
                 cmd += 'design.set_property("{}","CLKOUT{}_PHASE","{}","PLL")\n'.format(name, i, clock[2])
             else:
-                cmd += '# Phase shift needs to be implemented for PLL V3\n'
+                cmd += 'design.set_property("{}","CLKOUT{}_PHASE_SETTING","{}","PLL")\n'.format(name, i, clock[2] // 45)
 
         cmd += "target_freq = {\n"
         for i, clock in enumerate(block["clk_out"]):
@@ -269,6 +347,10 @@ design.create("{2}", "{3}", "./../gateware", overwrite=True)
                     output += self.generate_pll(block, partnumber)
                 if block["type"] == "GPIO":
                     output += self.generate_gpio(block)
+                if block["type"] == "MIPI_TX_LANE":
+                    output += self.generate_mipi_tx(block)
+                if block["type"] == "MIPI_RX_LANE":
+                    output += self.generate_mipi_rx(block)
         return output
 
     def footer(self):
@@ -288,7 +370,7 @@ design.save()"""
             dir  = "rx"
             mode = "in"
 
-        pad = self.platform.parser.get_gpio_instance_from_pin(params["location"][0])
+        pad = self.platform.parser.get_pad_name_from_pin(params["location"][0])
         pad = pad.replace("TXP", "TX")
         pad = pad.replace("TXN", "TX")
         pad = pad.replace("RXP", "RX")

@@ -11,7 +11,7 @@ import math
 from migen import *
 from migen.util.misc import xdir
 from migen.genlib import fifo
-from migen.genlib.cdc import MultiReg, PulseSynchronizer
+from migen.genlib.cdc import MultiReg, PulseSynchronizer, AsyncResetSynchronizer
 
 from litex.soc.interconnect.csr import *
 
@@ -242,17 +242,44 @@ class AsyncFIFO(_FIFOWrapper):
 # ClockDomainCrossing ------------------------------------------------------------------------------
 
 class ClockDomainCrossing(Module):
-    def __init__(self, layout, cd_from="sys", cd_to="sys", depth=None):
+    def __init__(self, layout, cd_from="sys", cd_to="sys", depth=None, with_common_rst=False):
         self.sink   = Endpoint(layout)
         self.source = Endpoint(layout)
+
         # # #
 
+        # Same Clk Domains.
         if cd_from == cd_to:
+            # No adaptation.
             self.comb += self.sink.connect(self.source)
+        # Different Clk Domains.
         else:
+            if with_common_rst:
+                # Create intermediate Clk Domains and generate a common Rst.
+                _cd_id   = id(self) # FIXME: Improve, used to allow build with anonymous modules.
+                _cd_rst  = Signal()
+                _cd_from = ClockDomain(f"from{_cd_id}")
+                _cd_to   = ClockDomain(f"to{_cd_id}")
+                self.clock_domains += _cd_from, _cd_to
+                self.comb += [
+                    _cd_from.clk.eq(ClockSignal(cd_from)),
+                    _cd_to.clk.eq(  ClockSignal(cd_to)),
+                    _cd_rst.eq(ResetSignal(cd_from) | ResetSignal(cd_to))
+                ]
+                cd_from = _cd_from.name
+                cd_to   = _cd_to.name
+                # Use common Rst on both Clk Domains (through AsyncResetSynchronizer).
+                self.specials += [
+                   AsyncResetSynchronizer(_cd_from, _cd_rst),
+                   AsyncResetSynchronizer(_cd_to,   _cd_rst),
+                ]
+
+            # Add Asynchronous FIFO
             cdc = AsyncFIFO(layout, depth)
             cdc = ClockDomainsRenamer({"write": cd_from, "read": cd_to})(cdc)
             self.submodules += cdc
+
+            # Sink -> AsyncFIFO -> Source.
             self.comb += self.sink.connect(cdc.sink)
             self.comb += cdc.source.connect(self.source)
 
@@ -739,7 +766,32 @@ class PipeReady(Module):
 
 # Buffer -------------------------------------------------------------------------------------------
 
-class Buffer(PipeValid): pass # FIXME: Replace Buffer with PipeValid in codebase?
+class Buffer(Module):
+    """Pipe valid/payload and/or ready to cut timing path"""
+    def __init__(self, layout, pipe_valid=True, pipe_ready=False):
+        self.sink   = sink   = Endpoint(layout)
+        self.source = source = Endpoint(layout)
+
+        # # #
+
+        pipeline = []
+
+        # Pipe Valid (Optional).
+        if pipe_valid:
+            self.submodules.pipe_valid = PipeValid(layout)
+            pipeline.append(self.pipe_valid)
+
+        # Pipe Ready (Optional).
+        if pipe_ready:
+            self.submodules.pipe_ready = PipeReady(layout)
+            pipeline.append(self.pipe_ready)
+
+        # Buffer Pipeline.
+        self.submodules.pipeline = Pipeline(
+            sink,
+            *pipeline,
+            source
+        )
 
 # Cast ---------------------------------------------------------------------------------------------
 

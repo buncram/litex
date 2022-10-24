@@ -8,6 +8,8 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 import os
+import time
+import threading
 import argparse
 import socket
 
@@ -34,11 +36,19 @@ class RemoteClient(EtherboneIPC, CSRBuilder):
         self.debug        = debug
         self.base_address = base_address if base_address is not None else 0
 
+    def _receive_server_info(self):
+        info = str(self.socket.recv(128))
+
+        # With LitePCIe, CSRs are translated to 0 to limit BAR0 size, so also translate base address.
+        if "CommPCIe" in info:
+            self.base_address = -self.mems.csr.base
+
     def open(self):
         if hasattr(self, "socket"):
             return
         self.socket = socket.create_connection((self.host, self.port), 5.0)
         self.socket.settimeout(5.0)
+        self._receive_server_info()
 
     def close(self):
         if not hasattr(self, "socket"):
@@ -86,20 +96,16 @@ class RemoteClient(EtherboneIPC, CSRBuilder):
 
 # Utils --------------------------------------------------------------------------------------------
 
-def reg2addr(reg):
-    bus = RemoteClient()
+def reg2addr(host, csr_csv, reg):
+    bus = RemoteClient(host=host, csr_csv=csr_csv)
     if hasattr(bus.regs, reg):
         return getattr(bus.regs, reg).addr
     else:
         raise ValueError(f"Register {reg} not present, exiting.")
 
-def dump_identifier(port):
-    bus = RemoteClient(port=port)
+def dump_identifier(host, csr_csv, port):
+    bus = RemoteClient(host=host, csr_csv=csr_csv, port=port)
     bus.open()
-
-    # On PCIe designs, CSR is remapped to 0 to limit BAR0 size.
-    if hasattr(bus.bases, "pcie_phy"):
-        bus.base_address = -bus.mems.csr.base
 
     fpga_identifier = ""
 
@@ -113,13 +119,9 @@ def dump_identifier(port):
 
     bus.close()
 
-def dump_registers(port, filter=None):
-    bus = RemoteClient(port=port)
+def dump_registers(host, csr_csv, port, filter=None):
+    bus = RemoteClient(host=host, csr_csv=csr_csv, port=port)
     bus.open()
-
-    # On PCIe designs, CSR is remapped to 0 to limit BAR0 size.
-    if hasattr(bus.bases, "pcie_phy"):
-        bus.base_address = -bus.mems.csr.base
 
     for name, register in bus.regs.__dict__.items():
         if (filter is None) or filter in name:
@@ -127,8 +129,8 @@ def dump_registers(port, filter=None):
 
     bus.close()
 
-def read_memory(port, addr, length):
-    bus = RemoteClient(port=port)
+def read_memory(host, csr_csv, port, addr, length):
+    bus = RemoteClient(host=host, csr_csv=csr_csv, port=port)
     bus.open()
 
     for offset in range(length//4):
@@ -136,11 +138,216 @@ def read_memory(port, addr, length):
 
     bus.close()
 
-def write_memory(port, addr, data):
-    bus = RemoteClient(port=port)
+def write_memory(host, csr_csv, port, addr, data):
+    bus = RemoteClient(host=host, csr_csv=csr_csv, port=port)
     bus.open()
 
     bus.write(addr, data)
+
+    bus.close()
+
+# Gui ----------------------------------------------------------------------------------------------
+
+def run_gui(host, csr_csv, port):
+    import dearpygui.dearpygui as dpg
+
+    bus = RemoteClient(host, csr_csv=csr_csv, port=port)
+    bus.open()
+
+    # Board capabilities.
+    # -------------------
+    with_identifier = hasattr(bus.bases, "identifier_mem")
+    with_leds       = hasattr(bus.regs, "leds_out")
+    with_buttons    = hasattr(bus.regs, "buttons_in")
+    with_xadc       = hasattr(bus.regs, "xadc_temperature")
+
+    # Board functions.
+    # ----------------
+    def reboot():
+        bus.regs.ctrl_reset.write(1)
+        bus.regs.ctrl_reset.write(0)
+
+    if with_identifier:
+        def get_identifier():
+            identifier = ""
+            for i in range(256):
+                c = chr(bus.read(bus.bases.identifier_mem + 4*i) & 0xff)
+                identifier += c
+                if c == "\0":
+                    break
+            return identifier
+
+    if with_leds:
+        def get_leds(led):
+            reg = bus.regs.leds_out.read()
+            return (reg >> led) & 0b1
+
+        def set_leds(led, val):
+            reg = bus.regs.leds_out.read()
+            reg &= ~(1<<led)
+            reg |= (val & 0b1)<<led
+            bus.regs.leds_out.write(reg)
+
+    if with_buttons:
+        def get_buttons(button):
+            reg = bus.regs.buttons_in.read()
+            return (reg >> button) & 0b1
+
+    if with_xadc:
+        def get_xadc_temp():
+            return bus.regs.xadc_temperature.read()*503.975/4096 - 273.15
+
+        def get_xadc_vccint():
+            return bus.regs.xadc_vccint.read()*3/4096
+
+        def get_xadc_vccaux():
+            return bus.regs.xadc_vccaux.read()*3/4096
+
+        def get_xadc_vccbram():
+            return bus.regs.xadc_vccbram.read()*3/4096
+
+        def gen_xadc_data(get_cls, n):
+            xadc_data = [get_cls()]*n
+            while True:
+                xadc_data.pop(-1)
+                xadc_data.insert(0, get_cls())
+                yield xadc_data
+
+    # Create Main Window.
+    # -------------------
+    dpg.create_context()
+    dpg.create_viewport(title="LiteX CLI GUI", width=1920, height=1080, always_on_top=True)
+    dpg.setup_dearpygui()
+
+    # Create CSR Window.
+    # ------------------
+    with dpg.window(label="FPGA CSR Registers", autosize=True):
+        dpg.add_text("Control/Status")
+        def filter_callback(sender, filter_str):
+            dpg.set_value("csr_filter", filter_str)
+        dpg.add_input_text(label="CSR Filter (inc, -exc)", callback=filter_callback)
+        dpg.add_text("CSR Registers:")
+        with dpg.filter_set(id="csr_filter"):
+            def reg_callback(tag, data):
+                for name, reg in  bus.regs.__dict__.items():
+                    if (tag == name):
+                        try:
+                            reg.write(int(data, 0))
+                        except:
+                            pass
+            for name, reg in bus.regs.__dict__.items():
+                dpg.add_input_text(
+                    indent     = 16,
+                    label      = f"0x{reg.addr:08x} - {name}",
+                    tag        = name,
+                    filter_key = name,
+                    callback   = reg_callback,
+                    on_enter   = True,
+                    width      = 200
+                )
+
+    # Create Peripheral Window.
+    # -------------------------
+    with dpg.window(label="FPGA Peripherals", autosize=True, pos=(550, 0)):
+        dpg.add_text("SoC")
+        dpg.add_button(label="Reboot", callback=reboot)
+        if with_identifier:
+            dpg.add_text(f"Identifier: {get_identifier()}")
+        if with_leds:
+           dpg.add_text("Leds")
+           with dpg.group(horizontal=True):
+                def led_callback(sender):
+                    for i in range(8): # FIXME: Get num.
+                        if sender == f"led{i}":
+                            val = get_leds(i)
+                            set_leds(i, ~val)
+                for i in range(8): # FIXME: Get num.
+                   dpg.add_checkbox(id=f"led{i}", callback=led_callback)
+        if with_buttons:
+            dpg.add_text("Buttons")
+            with dpg.group(horizontal=True):
+                for i in range(8): # FIXME: Get num.
+                    dpg.add_checkbox(id=f"btn{i}")
+
+    # Create XADC Window.
+    # -------------------
+    if with_xadc:
+        with dpg.window(label="FPGA XADC", width=600, height=600, pos=(950, 0)):
+            with dpg.subplots(2, 2, label="", width=-1, height=-1) as subplot_id:
+                # Temperature.
+                with dpg.plot(label=f"Temperature (°C)"):
+                    dpg.add_plot_axis(dpg.mvXAxis,  tag="temp_x")
+                    with dpg.plot_axis(dpg.mvYAxis, tag="temp_y"):
+                        dpg.add_line_series([], [], label="temp", tag="temp")
+                    dpg.set_axis_limits("temp_y", 0, 100)
+                # VCCInt.
+                with dpg.plot(label=f"VCCInt (V)"):
+                    dpg.add_plot_axis(dpg.mvXAxis,  tag="vccint_x")
+                    with dpg.plot_axis(dpg.mvYAxis, tag="vccint_y"):
+                        dpg.add_line_series([], [], label="vccint", tag="vccint")
+                    dpg.set_axis_limits("vccint_y", 0, 1.8)
+                # VCCAux.
+                with dpg.plot(label=f"VCCAux (V)"):
+                    dpg.add_plot_axis(dpg.mvXAxis,  tag="vccaux_x")
+                    with dpg.plot_axis(dpg.mvYAxis, tag="vccaux_y"):
+                        dpg.add_line_series([], [], label="vcaux", tag="vccaux")
+                    dpg.set_axis_limits("vccaux_y", 0, 2.5)
+                # VCCBRAM.
+                with dpg.plot(label=f"VCCBRAM (V)"):
+                    dpg.add_plot_axis(dpg.mvXAxis,  tag="vccbram_x")
+                    with dpg.plot_axis(dpg.mvYAxis, tag="vccbram_y"):
+                        dpg.add_line_series([], [], label="vccbram", tag="vccbram")
+                    dpg.set_axis_limits("vccbram_y", 0, 1.8)
+
+    def timer_callback(refresh=1e-1, xadc_points=100):
+        if with_xadc:
+            temp    = gen_xadc_data(get_xadc_temp,    n=xadc_points)
+            vccint  = gen_xadc_data(get_xadc_vccint,  n=xadc_points)
+            vccaux  = gen_xadc_data(get_xadc_vccaux,  n=xadc_points)
+            vccbram = gen_xadc_data(get_xadc_vccbram, n=xadc_points)
+
+        while dpg.is_dearpygui_running():
+            # CSR Update.
+            for name, reg in bus.regs.__dict__.items():
+                value = reg.read()
+                dpg.set_value(item=name, value=f"0x{reg.read():x}")
+
+            # XADC Update.
+            if with_xadc:
+                for name, gen in [
+                    ("temp",      temp),
+                    ("vccint",   vccint),
+                    ("vccbram", vccbram),
+                    ("vccaux",   vccaux),
+                    ("vccint",   vccint),
+                ]:
+                    datay = next(gen)
+                    datax = list(range(len(datay)))
+                    dpg.set_value(name, [datax, datay])
+                    dpg.set_item_label(name, name)
+                    dpg.set_axis_limits_auto(f"{name}_x")
+                    dpg.fit_axis_data(f"{name}_x")
+
+            # Peripherals.
+            if with_leds:
+                for i in range(8): # FIXME; Get num.
+                    dpg.set_value(f"led{i}", bool(get_leds(i)))
+
+            if with_buttons:
+                for i in range(8): # FIXME; Get num.
+                    dpg.set_value(f"btn{i}", bool(get_buttons(i)))
+
+            time.sleep(refresh)
+
+    timer_thread = threading.Thread(target=timer_callback)
+    timer_thread.start()
+
+    dpg.show_viewport()
+    try:
+        while dpg.is_dearpygui_running():
+            dpg.render_dearpygui_frame()
+    except KeyboardInterrupt:
+        dpg.destroy_context()
 
     bus.close()
 
@@ -148,36 +355,69 @@ def write_memory(port, addr, data):
 
 def main():
     parser = argparse.ArgumentParser(description="LiteX Client utility.", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("--port",   default="1234",        help="Host bind port.")
-    parser.add_argument("--ident",  action="store_true",   help="Dump SoC identifier.")
-    parser.add_argument("--regs",   action="store_true",   help="Dump SoC registers.")
-    parser.add_argument("--filter", default=None,          help="Registers filter (to be used with --regs).")
-    parser.add_argument("--read",   default=None,          help="Do a MMAP Read to SoC bus (--read addr/reg).")
-    parser.add_argument("--write",  default=None, nargs=2, help="Do a MMAP Write to SoC bus (--write addr/reg data).")
-    parser.add_argument("--length", default="4",           help="MMAP access length.")
+    parser.add_argument("--csr-csv", default="csr.csv",     help="CSR configuration file")
+    parser.add_argument("--host",    default="localhost",   help="Host ip address")
+    parser.add_argument("--port",    default="1234",        help="Host bind port.")
+    parser.add_argument("--ident",   action="store_true",   help="Dump SoC identifier.")
+    parser.add_argument("--regs",    action="store_true",   help="Dump SoC registers.")
+    parser.add_argument("--filter",  default=None,          help="Registers filter (to be used with --regs).")
+    parser.add_argument("--read",    default=None,          help="Do a MMAP Read to SoC bus (--read addr/reg).")
+    parser.add_argument("--write",   default=None, nargs=2, help="Do a MMAP Write to SoC bus (--write addr/reg data).")
+    parser.add_argument("--length",  default="4",           help="MMAP access length.")
+    parser.add_argument("--gui",     action="store_true",   help="Run Gui.")
     args = parser.parse_args()
 
-    port = int(args.port, 0)
+    host    = args.host
+    csr_csv = args.csr_csv
+    port    = int(args.port, 0)
 
     if args.ident:
-        dump_identifier(port=port)
+        dump_identifier(
+            host    = host,
+            csr_csv = csr_csv,
+            port    = port,
+        )
 
     if args.regs:
-        dump_registers(port=port, filter=args.filter)
+        dump_registers(
+            host    = args.host,
+            csr_csv = csr_csv,
+            port    = port,
+            filter  = args.filter,
+        )
 
     if args.read:
-        if isinstance(args.read, str):
-            addr = reg2addr(args.read)
-        else:
-            addr = int(args.read, 0)
-        read_memory(port=port, addr=addr, length=int(args.length, 0))
+        try:
+           addr = int(args.read, 0)
+        except ValueError:
+            addr = reg2addr(host, csr_csv, args.read)
+        read_memory(
+            host    = args.host,
+            csr_csv = csr_csv,
+            port    = port,
+            addr    = addr,
+            length  = int(args.length, 0),
+        )
 
     if args.write:
-        if isinstance(args.write[0], str):
-            addr = reg2addr(args.write[0])
-        else:
-            addr = int(args.write[0], 0)
-        write_memory(port=port, addr=addr, data=int(args.write[1], 0))
+        try:
+           addr = int(args.write[0], 0)
+        except ValueError:
+            addr = reg2addr(csr_csv, args.write[0])
+        write_memory(
+            host    = args.host,
+            csr_csv = csr_csv,
+            port    = port,
+            addr    = addr,
+            data    = int(args.write[1], 0),
+        )
+
+    if args.gui:
+        run_gui(
+            host    = args.host,
+            csr_csv = csr_csv,
+            port    = port,
+        )
 
 if __name__ == "__main__":
     main()

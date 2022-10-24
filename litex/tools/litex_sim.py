@@ -161,13 +161,20 @@ class SimSoC(SoCCore):
         platform     = Platform()
         sys_clk_freq = int(1e6)
 
+        # CRG --------------------------------------------------------------------------------------
+        self.submodules.crg = CRG(platform.request("sys_clk"))
+
         # SoCCore ----------------------------------------------------------------------------------
         SoCCore.__init__(self, platform, clk_freq=sys_clk_freq,
             ident = "LiteX Simulation",
             **kwargs)
 
-        # CRG --------------------------------------------------------------------------------------
-        self.submodules.crg = CRG(platform.request("sys_clk"))
+        # BIOS Config ------------------------------------------------------------------------------
+        # FIXME: Expose?
+        #self.add_config("BIOS_NO_PROMPT")
+        #self.add_config("BIOS_NO_DELAYS")
+        #self.add_config("BIOS_NO_BUILD_TIME")
+        #self.add_config("BIOS_NO_CRC")
 
         # SDRAM ------------------------------------------------------------------------------------
         if not self.integrated_main_ram_size and with_sdram:
@@ -187,8 +194,6 @@ class SimSoC(SoCCore):
             self.add_sdram("sdram",
                 phy                     = self.sdrphy,
                 module                  = sdram_module,
-                origin                  = self.mem_map["main_ram"],
-                size                    = kwargs.get("max_sdram_size", 0x40000000),
                 l2_cache_size           = kwargs.get("l2_size", 8192),
                 l2_cache_min_data_width = kwargs.get("min_l2_data_width", 128),
                 l2_cache_reverse        = False
@@ -243,7 +248,7 @@ class SimSoC(SoCCore):
                 dw         = 64 if ethernet_phy_model == "xgmii" else 32,
                 interface  = "wishbone",
                 endianness = self.cpu.endianness)
-            ethmac_region_size = (ethmac.rx_slots.read() + ethmac.tx_slots.read()) * ethmac.slot_size.read()
+            ethmac_region_size = (ethmac.rx_slots.constant + ethmac.tx_slots.constant)*ethmac.slot_size.constant
             self.add_memory_region("ethmac", self.mem_map.get("ethmac", None), ethmac_region_size, type="io")
             self.add_wb_slave(self.mem_regions["ethmac"].origin, ethmac.bus, ethmac_region_size)
             if self.irq.enabled:
@@ -356,7 +361,6 @@ def generate_gtkw_savefile(builder, vns, trace_fst):
             dfi_group("dfi commands", ["rddata"])
 
 def sim_args(parser):
-
     builder_args(parser)
     soc_core_args(parser)
     verilator_build_args(parser)
@@ -384,7 +388,8 @@ def sim_args(parser):
     parser.add_argument("--non-interactive",      action="store_true",     help="Run simulation without user input.")
 
 def main():
-    parser = argparse.ArgumentParser(description="LiteX SoC Simulation utility")
+    from litex.soc.integration.soc import LiteXSoCArgumentParser
+    parser = LiteXSoCArgumentParser(description="LiteX SoC Simulation utility")
     sim_args(parser)
     args = parser.parse_args()
 
@@ -410,10 +415,13 @@ def main():
         soc_kwargs["integrated_rom_init"] = get_mem_data(args.rom_init, endianness=cpu.endianness)
 
     # RAM / SDRAM.
+    ram_boot_offset  = 0x40000000 # FIXME
+    ram_boot_address = None
     soc_kwargs["integrated_main_ram_size"] = args.integrated_main_ram_size
     if args.integrated_main_ram_size:
         if args.ram_init is not None:
-            soc_kwargs["integrated_main_ram_init"] = get_mem_data(args.ram_init, endianness=cpu.endianness)
+            soc_kwargs["integrated_main_ram_init"] = get_mem_data(args.ram_init, endianness=cpu.endianness, offset=ram_boot_offset)
+            ram_boot_address                       = get_boot_address(args.ram_init)
     elif args.with_sdram:
         assert args.ram_init is None
         soc_kwargs["sdram_module"]     = args.sdram_module
@@ -421,6 +429,9 @@ def main():
         soc_kwargs["sdram_verbosity"]  = int(args.sdram_verbosity)
         if args.sdram_from_spd_dump:
             soc_kwargs["sdram_spd_data"] = parse_spd_hexdump(args.sdram_from_spd_dump)
+        if args.sdram_init is not None:
+            soc_kwargs["sdram_init"] = get_mem_data(args.sdram_init, endianness=cpu.endianness, offset=ram_boot_offset)
+            ram_boot_address         = get_boot_address(args.sdram_init)
 
     # Ethernet.
     if args.with_ethernet or args.with_etherbone:
@@ -450,11 +461,12 @@ def main():
         with_gpio          = args.with_gpio,
         sim_debug          = args.sim_debug,
         trace_reset_on     = int(float(args.trace_start)) > 0 or int(float(args.trace_end)) > 0,
-        sdram_init         = []   if args.sdram_init     is None else get_mem_data(args.sdram_init,     endianness=cpu.endianness),
         spi_flash_init     = None if args.spi_flash_init is None else get_mem_data(args.spi_flash_init, endianness="big"),
         **soc_kwargs)
-    if args.ram_init is not None or args.sdram_init is not None:
-        soc.add_constant("ROM_BOOT_ADDRESS", soc.mem_map["main_ram"])
+    if ram_boot_address is not None:
+        if ram_boot_address == 0:
+            ram_boot_address = ram_boot_offset
+        soc.add_constant("ROM_BOOT_ADDRESS", ram_boot_address)
     if args.with_ethernet:
         for i in range(4):
             soc.add_constant("LOCALIP{}".format(i+1), int(args.local_ip.split(".")[i]))
@@ -466,7 +478,6 @@ def main():
         if args.trace:
             generate_gtkw_savefile(builder, vns, args.trace_fst)
 
-    builder_kwargs["csr_csv"] = "csr.csv"
     builder = Builder(soc, **builder_kwargs)
     builder.build(
         sim_config       = sim_config,

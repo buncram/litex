@@ -43,7 +43,7 @@
 
 __attribute__((unused)) void cdelay(int i)
 {
-#ifndef CONFIG_DISABLE_DELAYS
+#ifndef CONFIG_BIOS_NO_DELAYS
 	while(i > 0) {
 		__asm__ volatile(CONFIG_CPU_NOP);
 		i--;
@@ -54,10 +54,6 @@ __attribute__((unused)) void cdelay(int i)
 /*-----------------------------------------------------------------------*/
 /* Constants                                                             */
 /*-----------------------------------------------------------------------*/
-
-#ifndef MEMTEST_DATA_SIZE
-#define MEMTEST_DATA_SIZE (2*1024*1024)
-#endif
 
 #define DFII_PIX_DATA_BYTES SDRAM_PHY_DFI_DATABITS/8
 
@@ -330,7 +326,7 @@ static unsigned int sdram_write_read_check_test_pattern(int module, unsigned int
 	command_pwr(DFII_COMMAND_CAS|DFII_COMMAND_WE|DFII_COMMAND_CS|DFII_COMMAND_WRDATA);
 	cdelay(15);
 
-#ifdef SDRAM_PHY_ECP5DDRPHY
+#if defined(SDRAM_PHY_ECP5DDRPHY) || defined(SDRAM_PHY_GW2DDRPHY)
 	ddrphy_burstdet_clr_write(1);
 #endif
 
@@ -350,13 +346,23 @@ static unsigned int sdram_write_read_check_test_pattern(int module, unsigned int
 		/* Verify bytes matching current 'module' */
 		for (int i = 0; i < DFII_PIX_DATA_BYTES; ++i) {
 			int j = p * DFII_PIX_DATA_BYTES + i;
+#if SDRAM_PHY_DQ_DQS_RATIO == 4
+			if (j % (SDRAM_PHY_MODULES/2) == ((SDRAM_PHY_MODULES-1)/2)-(module/2)) {
+				if(module % 2) {
+					errors += popcount((prs[p][i] & 0xf0) ^ (tst[i] & 0xf0));
+				} else {
+					errors += popcount((prs[p][i] & 0x0f) ^ (tst[i] & 0x0f));
+				}
+			}
+#else
 			if (j % SDRAM_PHY_MODULES == SDRAM_PHY_MODULES-1-module) {
 				errors += popcount(prs[p][i] ^ tst[i]);
 			}
+#endif
 		}
 	}
 
-#ifdef SDRAM_PHY_ECP5DDRPHY
+#if defined(SDRAM_PHY_ECP5DDRPHY) || defined(SDRAM_PHY_GW2DDRPHY)
 	if (((ddrphy_burstdet_seen_read() >> module) & 0x1) != 1)
 		errors += 1;
 #endif
@@ -402,14 +408,16 @@ static void sdram_leveling_center_module(
 
 	/* Get a bit further into the working zone */
 #if SDRAM_PHY_DELAYS > 32
-	for(i=0;i<16;i++) {
+	#define	SDRAM_PHY_DELAY_JUMP 16
+#elif SDRAM_PHY_DELAYS > 8
+	#define SDRAM_PHY_DELAY_JUMP 4
+#else
+	#define SDRAM_PHY_DELAY_JUMP 1
+#endif
+	for(i=0;i<SDRAM_PHY_DELAY_JUMP;i++) {
 		delay += 1;
 		inc_delay(module);
 	}
-#else
-	delay++;
-	inc_delay(module);
-#endif
 
 	/* Find largest working delay */
 	while(1) {
@@ -437,7 +445,7 @@ static void sdram_leveling_center_module(
 	if (show_long)
 		printf("| ");
 
-	delay_mid = (delay_min+delay_max)/2 % SDRAM_PHY_DELAYS;
+	delay_mid   = (delay_min+delay_max)/2 % SDRAM_PHY_DELAYS;
 	delay_range = (delay_max-delay_min)/2;
 	if (show_short) {
 		if (delay_min < 0)
@@ -449,12 +457,25 @@ static void sdram_leveling_center_module(
 	if (show_long)
 		printf("\n");
 
-	/* Set delay to the middle */
-	rst_delay(module);
-    cdelay(100);
-	for(i = 0; i < delay_mid; i++) {
-		inc_delay(module);
-		cdelay(100);
+	/* Set delay to the middle and check */
+	if (delay_min >= 0) {
+		int retries = 8; /* Do N configs/checks and give up if failing */
+		while (retries > 0) {
+			/* Set delay. */
+			rst_delay(module);
+			cdelay(100);
+			for(i = 0; i < delay_mid; i++) {
+				inc_delay(module);
+				cdelay(100);
+			}
+
+			/* Check */
+			errors  = sdram_write_read_check_test_pattern(module, 42);
+			errors += sdram_write_read_check_test_pattern(module, 84);
+			if (errors == 0)
+				break;
+			retries--;
+		}
 	}
 }
 
@@ -625,7 +646,11 @@ static int sdram_write_leveling_scan(int *delays, int loops, int show)
 				ddrphy_wlevel_strobe_write(1);
 				cdelay(100);
 				csr_rd_buf_uint8(sdram_dfii_pix_rddata_addr(0), buf, DFII_PIX_DATA_BYTES);
+#if SDRAM_PHY_DQ_DQS_RATIO == 4
+				if (buf[SDRAM_PHY_MODULES-1-(i/2)] != 0)
+#else
 				if (buf[SDRAM_PHY_MODULES-1-i] != 0)
+#endif
 					one_count++;
 				else
 					zero_count++;
@@ -869,7 +894,7 @@ static void sdram_read_leveling_rst_delay(int module) {
 	/* Un-select module */
 	ddrphy_dly_sel_write(0);
 
-#ifdef SDRAM_PHY_ECP5DDRPHY
+#if defined(SDRAM_PHY_ECP5DDRPHY) || defined(SDRAM_PHY_GW2DDRPHY)
 	/* Sync all DQSBUFM's, By toggling all dly_sel (DQSBUFM.PAUSE) lines. */
 	ddrphy_dly_sel_write(0xff);
 	ddrphy_dly_sel_write(0);
@@ -886,7 +911,7 @@ static void sdram_read_leveling_inc_delay(int module) {
 	/* Un-select module */
 	ddrphy_dly_sel_write(0);
 
-#ifdef SDRAM_PHY_ECP5DDRPHY
+#if defined(SDRAM_PHY_ECP5DDRPHY) || defined(SDRAM_PHY_GW2DDRPHY)
 	/* Sync all DQSBUFM's, By toggling all dly_sel (DQSBUFM.PAUSE) lines. */
 	ddrphy_dly_sel_write(0xff);
 	ddrphy_dly_sel_write(0);

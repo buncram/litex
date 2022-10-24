@@ -1,7 +1,8 @@
 #
 # This file is part of LiteX.
 #
-# Copyright (c) 2020-2021 Florent Kermarrec <florent@enjoy-digital.fr>
+# Copyright (c) 2020-2022 Florent Kermarrec <florent@enjoy-digital.fr>
+# Copyright (c) 2022 Wolfgang Nagele <mail@wnagele.com>
 # SPDX-License-Identifier: BSD-2-Clause
 
 import math
@@ -18,27 +19,31 @@ _CHASER_MODE  = 0
 _CONTROL_MODE = 1
 
 class LedChaser(Module, AutoCSR):
-    def __init__(self, pads, sys_clk_freq, period=1e0):
-        self.pads = pads
-        self._out = CSRStorage(len(pads), description="Led Output(s) Control.")
+    def __init__(self, pads, sys_clk_freq, period=1e0, polarity=0):
+        self.pads     = pads
+        self.polarity = polarity
+        self.n        = len(pads)
+        self._out     = CSRStorage(len(pads), description="Led Output(s) Control.")
 
         # # #
 
-        n      = len(pads)
-        chaser = Signal(n)
+
+        chaser = Signal(self.n)
         mode   = Signal(reset=_CHASER_MODE)
-        timer  = WaitTimer(int(period*sys_clk_freq/(2*n)))
+        timer  = WaitTimer(int(period*sys_clk_freq/(2*self.n)))
+        leds   = Signal(self.n)
         self.submodules += timer
         self.comb += timer.wait.eq(~timer.done)
         self.sync += If(timer.done, chaser.eq(Cat(~chaser[-1], chaser)))
         self.sync += If(self._out.re, mode.eq(_CONTROL_MODE))
         self.comb += [
             If(mode == _CONTROL_MODE,
-                pads.eq(self._out.storage)
+                leds.eq(self._out.storage)
             ).Else(
-                pads.eq(chaser)
+                leds.eq(chaser)
             )
         ]
+        self.comb += pads.eq(leds ^ (self.polarity*(2**self.n-1)))
 
     def add_pwm(self, default_width=512, default_period=1024, with_csr=True):
         from litex.soc.cores.pwm import PWM
@@ -49,7 +54,7 @@ class LedChaser(Module, AutoCSR):
             default_period = default_period
         )
         # Use PWM as Output Enable for pads.
-        self.comb += If(~self.pwm.pwm, self.pads.eq(0))
+        self.comb += If(~self.pwm.pwm, self.pads.eq(self.polarity*(2**self.n-1)))
 
 
 # WS2812/NeoPixel ----------------------------------------------------------------------------------
@@ -71,7 +76,7 @@ class WS2812(Module):
      - Each Led will "digest" a 24-bit control word:  (MSB) G-R-B (LSB).
      - Leds can be chained through DIN->DOUT connection.
 
-     Each control sequence is separated by a reset code: Line low for > 50us.
+     Each control sequence is separated by a reset code: Line low for > 50us (old) or > 280us (new).
      Ones are transmitted as:
                        ┌─────┐
                        │ T0H │           │  T0H = 400ns +-150ns
@@ -82,6 +87,14 @@ class WS2812(Module):
                        │   T1H    │      │  T1H = 850ns +-150ns
                        │          │ T1L  │  T1L = 450ns +-150ns
                                   └──────┘
+
+    Hardware Revisions
+    ------------------
+    Different revision of WS2812 have been released over the years. Unfortunately not all of them
+    have compatible timings, especially on reset that has a minimal width of 50us on older models
+    and 280us on newer models. By default, the core will use the timings of the newer models since
+    also working on older models. Reset pulse and refresh rate can be improve for older models by
+    setting revision to "old".
 
     Integration
     -----------
@@ -117,12 +130,12 @@ class WS2812(Module):
      sys_clk_freq: int, in
          System Clk Frequency.
     """
-    def __init__(self, pad, nleds, sys_clk_freq, bus_mastering=False, bus_base=None):
+    def __init__(self, pad, nleds, sys_clk_freq, bus_mastering=False, bus_base=None, revision="new", init=None):
         if bus_mastering:
             self.bus  = bus = wishbone.Interface(data_width=32)
         else:
             # Memory.
-            mem = Memory(32, nleds)
+            mem = Memory(32, nleds, init=init)
             port = mem.get_port()
             self.specials += mem, port
 
@@ -136,35 +149,37 @@ class WS2812(Module):
 
 
         # Internal Signals.
-        led_data  = Signal(24)
-        bit_count = Signal(8)
-        led_count = Signal(int(math.log2(nleds)))
+        led_count  = Signal(max=nleds)
+        led_data   = Signal(24)
+        xfer_start = Signal()
+        xfer_done  = Signal()
+        xfer_data  = Signal(24)
 
-        # Timings.
-        trst = 75e-6
-        t0h  = 0.40e-6
-        t0l  = 0.85e-6
-        t1h  = 0.80e-6
-        t1l  = 0.45e-6
+        # Timings
+        self.trst = trst = {"old": 50e-6*1.25, "new": 280e-6*1.25}[revision]
+        self.t0h  = t0h  = 0.40e-6
+        self.t0l  = t0l  = 0.85e-6
+        self.t1h  = t1h  = 0.80e-6
+        self.t1l  = t1l  = 0.45e-6
 
         # Timers.
-        t0h_timer = WaitTimer(int(t0h*sys_clk_freq))
-        t0l_timer = WaitTimer(int(t0l*sys_clk_freq))
-        self.submodules += t0h_timer, t0l_timer
-
-        t1h_timer = WaitTimer(int(t1h*sys_clk_freq))
-        t1l_timer = WaitTimer(int(t1l*sys_clk_freq))
-        self.submodules += t1h_timer, t1l_timer
-
         trst_timer = WaitTimer(int(trst*sys_clk_freq))
         self.submodules += trst_timer
 
-        # FSM
+        t0h_timer = WaitTimer(int(t0h*sys_clk_freq))
+        t0l_timer = WaitTimer(int(t0l*sys_clk_freq) - 1) # Compensate Xfer FSM latency.
+        self.submodules += t0h_timer, t0l_timer
+
+        t1h_timer = WaitTimer(int(t1h*sys_clk_freq))
+        t1l_timer = WaitTimer(int(t1l*sys_clk_freq) - 1) # Compensate Xfer FSM latency.
+        self.submodules += t1h_timer, t1l_timer
+
+        # Main FSM.
         self.submodules.fsm = fsm = FSM(reset_state="RST")
         fsm.act("RST",
-            trst_timer.wait.eq(1),
+            NextValue(led_count, 0),
+            trst_timer.wait.eq(xfer_done),
             If(trst_timer.done,
-                NextValue(led_count, 0),
                 NextState("LED-READ")
             )
         )
@@ -176,57 +191,74 @@ class WS2812(Module):
                 bus.sel.eq(2**(bus.data_width//8)-1),
                 bus.adr.eq(bus_base[2:] + led_count),
                 If(bus.ack,
-                    NextValue(bit_count, 24-1),
                     NextValue(led_data, bus.dat_r),
-                    NextState("BIT-TEST")
+                    NextState("LED-SEND")
                 )
             )
         else:
             self.comb += port.adr.eq(led_count)
             fsm.act("LED-READ",
-                NextValue(bit_count, 24-1),
+                NextState("LED-LATCH")
+            )
+            fsm.act("LED-LATCH",
                 NextValue(led_data, port.dat_r),
-                NextState("BIT-TEST")
+                NextState("LED-SEND")
             )
 
-        fsm.act("BIT-TEST",
-            If(led_data[-1] == 0,
-                NextState("ZERO-SEND"),
-            ),
-            If(led_data[-1] == 1,
-                NextState("ONE-SEND"),
-            ),
-        )
-        fsm.act("ZERO-SEND",
-            t0h_timer.wait.eq(1),
-            t0l_timer.wait.eq(t0h_timer.done),
-            pad.eq(~t0h_timer.done),
-            If(t0l_timer.done,
-                NextState("BIT-SHIFT")
-            )
-        )
-        fsm.act("ONE-SEND",
-            t1h_timer.wait.eq(1),
-            t1l_timer.wait.eq(t1h_timer.done),
-            pad.eq(~t1h_timer.done),
-            If(t1l_timer.done,
-                NextState("BIT-SHIFT")
-            )
-        )
-        fsm.act("BIT-SHIFT",
-            NextValue(led_data, Cat(Signal(), led_data)),
-            NextValue(bit_count, bit_count - 1),
-            If(bit_count == 0,
+        fsm.act("LED-SEND",
+            If(xfer_done,
+                xfer_start.eq(1),
                 NextState("LED-SHIFT")
-            ).Else(
-                NextState("BIT-TEST")
             )
         )
         fsm.act("LED-SHIFT",
-            NextValue(led_count, led_count + 1),
-            If(led_count == (nleds-1),
+            If(led_count == (nleds - 1),
                 NextState("RST")
             ).Else(
+                NextValue(led_count, led_count + 1),
                 NextState("LED-READ")
+            )
+        )
+
+        # XFER FSM.
+        xfer_bit = Signal(5)
+        xfer_fsm = FSM(reset_state="IDLE")
+        self.submodules += xfer_fsm
+        xfer_fsm.act("IDLE",
+            xfer_done.eq(1),
+            If(xfer_start,
+                NextValue(xfer_bit, 24-1),
+                NextValue(xfer_data, led_data),
+                NextState("RUN")
+            )
+        )
+        xfer_fsm.act("RUN",
+            # Send a one.
+            If(xfer_data[-1],
+                t1h_timer.wait.eq(1),
+                t1l_timer.wait.eq(t1h_timer.done),
+                pad.eq(~t1h_timer.done),
+            # Send a zero.
+            ).Else(
+                t0h_timer.wait.eq(1),
+                t0l_timer.wait.eq(t0h_timer.done),
+                pad.eq(~t0h_timer.done),
+            ),
+
+            # When bit has been sent:
+            If(t0l_timer.done | t1l_timer.done,
+                # Clear wait on timers.
+                t0h_timer.wait.eq(0),
+                t0l_timer.wait.eq(0),
+                t1h_timer.wait.eq(0),
+                t1l_timer.wait.eq(0),
+                # Shift xfer_data.
+                NextValue(xfer_data, Cat(Signal(), xfer_data)),
+                # Decrement xfer_bit.
+                NextValue(xfer_bit, xfer_bit - 1),
+                # When xfer_bit reaches 0.
+                If(xfer_bit == 0,
+                    NextState("IDLE")
+                )
             )
         )

@@ -33,6 +33,7 @@
 
 #include <libbase/console.h>
 #include <libbase/crc.h>
+#include <libbase/memtest.h>
 
 #include <libbase/spiflash.h>
 #include <libbase/uart.h>
@@ -48,6 +49,7 @@
 #include <liblitesdcard/sdcard.h>
 #include <liblitesata/sata.h>
 
+#ifndef CONFIG_BIOS_NO_BOOT
 static void boot_sequence(void)
 {
 #ifdef CSR_UART_BASE
@@ -74,14 +76,17 @@ static void boot_sequence(void)
 #endif
 	printf("No boot medium found\n");
 }
+#endif
 
 __attribute__((__used__)) int main(int i, char **c)
 {
+#ifndef BIOS_CONSOLE_DISABLE
 	char buffer[CMD_LINE_BUFFER_SIZE];
 	char *params[MAX_PARAM];
 	char *command;
 	struct command_struct *cmd;
 	int nb_params;
+#endif
 	int sdr_ok;
 
 #ifdef CONFIG_CPU_HAS_INTERRUPT
@@ -96,7 +101,7 @@ __attribute__((__used__)) int main(int i, char **c)
 	i2c_send_init_cmds();
 #endif
 
-#ifndef CONFIG_SIM_DISABLE_BIOS_PROMPT
+#ifndef CONFIG_BIOS_NO_PROMPT
 	printf("\n");
 	printf("\e[1m        __   _ __      _  __\e[0m\n");
 	printf("\e[1m       / /  (_) /____ | |/_/\e[0m\n");
@@ -107,12 +112,13 @@ __attribute__((__used__)) int main(int i, char **c)
 	printf(" (c) Copyright 2012-2022 Enjoy-Digital\n");
 	printf(" (c) Copyright 2007-2015 M-Labs\n");
 	printf("\n");
-#ifdef CONFIG_WITH_BUILD_TIME
+#ifndef CONFIG_BIOS_NO_BUILD_TIME
 	printf(" BIOS built on "__DATE__" "__TIME__"\n");
 #endif
+#ifndef CONFIG_BIOS_NO_CRC
 	crcbios();
+#endif
 	printf("\n");
-	printf(" Migen git sha1: "MIGEN_GIT_SHA1"\n");
 	printf(" LiteX git sha1: "LITEX_GIT_SHA1"\n");
 	printf("\n");
 	printf("--=============== \e[1mSoC\e[0m ==================--\n");
@@ -149,48 +155,65 @@ __attribute__((__used__)) int main(int i, char **c)
 #endif
 #endif
 	printf("\n");
-#endif // CONFIG_SIM_DISABLE_BIOS_PROMPT
+#endif
 
         sdr_ok = 1;
 
-#if defined(CSR_ETHMAC_BASE) || defined(CSR_SDRAM_BASE) || defined(CSR_SPIFLASH_CORE_BASE)
+#if defined(CSR_ETHMAC_BASE) || defined(MAIN_RAM_BASE) || defined(CSR_SPIFLASH_CORE_BASE)
     printf("--========== \e[1mInitialization\e[0m ============--\n");
 #ifdef CSR_ETHMAC_BASE
 	eth_init();
 #endif
+
+	/* Initialize and test DRAM */
 #ifdef CSR_SDRAM_BASE
 	sdr_ok = sdram_init();
 #else
-#ifdef MAIN_RAM_TEST
-	sdr_ok = memtest();
+	/* Test Main RAM when present and not pre-initialized */
+#ifdef MAIN_RAM_BASE
+#ifndef CONFIG_MAIN_RAM_INIT
+	sdr_ok = memtest((unsigned int *) MAIN_RAM_BASE, min(MAIN_RAM_SIZE, MEMTEST_DATA_SIZE));
+	memspeed((unsigned int *) MAIN_RAM_BASE, min(MAIN_RAM_SIZE, MEMTEST_DATA_SIZE), false, 0);
+#endif
 #endif
 #endif
 	if (sdr_ok != 1)
 		printf("Memory initialization failed\n");
 #endif
+
+	/* Initialize and test SPIFLASH */
 #ifdef CSR_SPIFLASH_CORE_BASE
 	spiflash_init();
 #endif
-printf("\n");
+	printf("\n");
 
-#ifdef CSR_VIDEO_FRAMEBUFFER_BASE
+
 	/* Initialize Video Framebuffer FIXME: Move */
+#ifdef CSR_VIDEO_FRAMEBUFFER_BASE
 	video_framebuffer_vtg_enable_write(0);
 	video_framebuffer_dma_enable_write(0);
 	video_framebuffer_vtg_enable_write(1);
 	video_framebuffer_dma_enable_write(1);
 #endif
 
+	/* Execute  initialization functions */
 	init_dispatcher();
 
+	/* Execute Boot sequence */
+#ifndef CONFIG_BIOS_NO_BOOT
 	if(sdr_ok) {
 		printf("--============== \e[1mBoot\e[0m ==================--\n");
 		boot_sequence();
 		printf("\n");
 	}
+#endif
 
+	/* Console */
+#ifdef BIOS_CONSOLE_DISABLE
+	printf("--======= \e[1mDone (No Console) \e[0m ==========--\n");
+#else
 	printf("--============= \e[1mConsole\e[0m ================--\n");
-#if !defined(TERM_MINI) && !defined(TERM_NO_HIST)
+#if !defined(BIOS_CONSOLE_LITE) && !defined(BIOS_CONSOLE_NO_HISTORY)
 	hist_init();
 #endif
 	printf("\n%s", PROMPT);
@@ -205,5 +228,6 @@ printf("\n");
 		}
 		printf("\n%s", PROMPT);
 	}
+#endif
 	return 0;
 }
