@@ -24,6 +24,7 @@ graft litex/soc/cores/cpu/picorv32
 graft litex/soc/cores/cpu/rocket
 graft litex/soc/cores/cpu/serv
 graft litex/soc/cores/cpu/vexriscv
+graft litex/soc/cores/cpu/vexriscv_axi
 graft litex/soc/cores/cpu/vexriscv_smp
 graft litex/soc/cores/cpu/zynq7000
 graft litex/soc/cores/cpu/zynqmp
