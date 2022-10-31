@@ -13,6 +13,7 @@ from litex.soc.cores.cpu import CPU, CPU_GCC_TRIPLE_RISCV32
 from litex.soc.interconnect.csr import *
 from litex.soc.interconnect import axi
 from litex.soc.interconnect import wishbone
+from litex.soc.integration.soc import SoCRegion
 
 class Open(Signal): pass
 
@@ -63,7 +64,7 @@ class VexRiscvAxi(CPU):
             "rom"      : 0x6000_0000,
             "sram"     : 0x2000_0000,
             "main_ram" : 0x6100_0000,
-            "csr"      : 0x4000_0000,
+            "csr"      : 0xa000_0000,
         }
 
     # GCC Flags.
@@ -75,12 +76,25 @@ class VexRiscvAxi(CPU):
 
     def __init__(self, platform, variant="standard-debug", with_timer=False):
         self.platform     = platform
+        self.variant          = variant
+        self.human_name       = "VexRiscvAxi4"
+        self.external_variant = None
         self.reset            = Signal()
         self.interrupt        = Signal(32)
-        ibus              = axi.AXIInterface(data_width=64, address_width=32, id_width=1)
-        dbus              = axi.AXIInterface(data_width=32, address_width=32, id_width=1)
-        self.periph_buses = [ibus, dbus]
-        self.memory_buses = []
+
+        # Create AXI-Full Interfaces.
+        self.ibus_axi   =  ibus = axi.AXIInterface(data_width=64, address_width=32, id_width = 1)
+        self.dbus_axi   =  dbus = axi.AXIInterface(data_width=32, address_width=32, id_width = 1)
+
+        # Create AXI-Lite Interfaces.
+        self.dbus             = dbus_lite = axi.AXILiteInterface(data_width=32, address_width=32)
+
+        # Adapt AXI interfaces to AXILite.
+        self.submodules += axi.AXI2AXILite(dbus, dbus_lite)
+
+        # Expose AXI-Lite Interfaces.
+        self.periph_buses     = [dbus_lite] # Peripheral buses (Connected to main SoC's bus).
+        self.memory_buses     = [['ibus', ibus], ['dbus', dbus]]   # Memory buses (Connected directly to LiteDRAM).
 
         # CPU Instance.
         self.cpu_params = dict(
@@ -126,7 +140,7 @@ class VexRiscvAxi(CPU):
             o_iBusAxi_ar_payload_size  = ibus.ar.size,
             o_iBusAxi_ar_payload_id    = ibus.ar.id, # not on M3
             o_iBusAxi_ar_payload_qos   = ibus.ar.qos, # not on M3
-            o_iBusAxi_ar_payload_region = ibus.ar.region, # not on M3
+            o_iBusAxi_ar_payload_region = Open(), # ibus.ar.region, # not on M3
 
             i_iBusAxi_r_valid          = ibus.r.valid,
             o_iBusAxi_r_ready          = ibus.r.ready,
@@ -146,7 +160,7 @@ class VexRiscvAxi(CPU):
             o_dBusAxi_aw_payload_prot  = dbus.aw.prot,
             o_dBusAxi_aw_payload_size  = dbus.aw.size,
             o_dBusAxi_aw_payload_id    = dbus.aw.id, # not on M3
-            o_dBusAxi_aw_payload_region = dbus.aw.region, # not on M3
+            o_dBusAxi_aw_payload_region = Open(), # dbus.aw.region, # not on M3
             o_dBusAxi_aw_payload_qos   = dbus.aw.qos, # not on M3
 
             o_dBusAxi_w_valid          = dbus.w.valid,
@@ -170,7 +184,7 @@ class VexRiscvAxi(CPU):
             o_dBusAxi_ar_payload_prot  = dbus.ar.prot,
             o_dBusAxi_ar_payload_size  = dbus.ar.size,
             o_dBusAxi_ar_payload_id    = dbus.ar.id, # not on M3
-            o_dBusAxi_ar_payload_region = dbus.ar.region, # not on M3
+            o_dBusAxi_ar_payload_region = Open(), # dbus.ar.region, # not on M3
             o_dBusAxi_ar_payload_qos   = dbus.ar.qos, # not oon M3
 
             i_dBusAxi_r_valid          = dbus.r.valid,
@@ -198,12 +212,6 @@ class VexRiscvAxi(CPU):
             i_jtag_tck      = pads.tck,
             i_debugReset    = pads.trst,
         )
-
-    def do_finalize(self):
-        assert hasattr(self, "reset_address")
-        if not self.external_variant:
-            self.add_sources(self.platform, self.variant)
-        self.specials += Instance("VexRiscvAxi4", **self.cpu_params)
 
     def set_reset_address(self, reset_address):
         self.reset_address = reset_address
@@ -297,9 +305,41 @@ class VexRiscvAxi(CPU):
             o_debug_resetOut                = self.o_resetOut
         )
 
+    @staticmethod
+    def add_sources(platform, variant="standard"):
+        platform.add_source("VexRiscv.v")
+
+    def add_soc_components(self, soc, soc_region_cls):
+        # Connect Debug interface to SoC.
+        if "debug" in self.variant:
+            soc.bus.add_slave("vexriscv_debug", self.debug_bus, region=
+                soc_region_cls(
+                    origin = soc.mem_map.get("vexriscv_debug"),
+                    size   = 0x100,
+                    cached = False
+                )
+            )
+
+        # Pass I/D Caches info to software.
+        base_variant = str(self.variant.split('+')[0])
+        # DCACHE is present on all variants except minimal and lite.
+        if not base_variant in ["minimal", "lite"]:
+            soc.add_config("CPU_HAS_DCACHE")
+        # ICACHE is present on all variants except minimal.
+        if not base_variant in ["minimal"]:
+            soc.add_config("CPU_HAS_ICACHE")
+
     def use_external_variant(self, variant_filename):
         self.external_variant = True
         self.platform.add_source(variant_filename)
+
+    def do_finalize(self):
+        assert hasattr(self, "reset_address")
+        if not self.external_variant:
+            self.add_sources(self.platform, self.variant)
+        self.specials += Instance("VexRiscvAxi4", **self.cpu_params)
+        if hasattr(self, "cfu_params"):
+            self.specials += Instance("Cfu", **self.cfu_params)
 
 """
 module VexRiscvAxi4 (
