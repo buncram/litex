@@ -19,10 +19,12 @@ import struct
 import shutil
 
 from litex import get_data_mod
+from litex.gen import colorer
+
 from litex.build.tools import write_to_file
-from litex.soc.integration import export, soc_core
-from litex.soc.integration.soc import colorer
+
 from litex.soc.cores import cpu
+from litex.soc.integration import export, soc_core
 
 # Helpers ------------------------------------------------------------------------------------------
 
@@ -287,7 +289,10 @@ class Builder:
     def _initialize_rom_software(self):
         # Get BIOS data from compiled BIOS binary.
         bios_file = os.path.join(self.software_dir, "bios", "bios.bin")
-        bios_data = soc_core.get_mem_data(bios_file, self.soc.cpu.endianness)
+        bios_data = soc_core.get_mem_data(bios_file,
+            data_width = self.soc.bus.data_width,
+            endianness = self.soc.cpu.endianness,
+        )
 
         # Initialize SoC with with BIOS data.
         self.soc.initialize_rom(bios_data)

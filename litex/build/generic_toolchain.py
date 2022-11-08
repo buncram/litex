@@ -18,6 +18,7 @@ class GenericToolchain:
     }
 
     supported_build_backend = ["litex"]
+    _support_mixed_language  = True
 
     def __init__(self):
         self.clocks      = dict()
@@ -26,6 +27,10 @@ class GenericToolchain:
         self.named_sc    = []
         self._vns        = None
         self._synth_opts = ""
+
+    @property
+    def support_mixed_language(self):
+        return self._support_mixed_language
 
     def finalize(self):
         pass # Pass since optional.
@@ -117,7 +122,7 @@ class GenericToolchain:
             from edalize import get_edatool
 
             # Get tool name and options
-            (tool, tool_options)= self.get_tool_options()
+            (tool, tool_options) = self.get_tool_options()
 
             # Files list
             files = []
@@ -139,7 +144,7 @@ class GenericToolchain:
             edam = {
                 'name'         : self._build_name,
                 'files'        : files,
-                'tool_options' : {tool: tool_options},
+                **tool_options,
                 'toplevel'     : self._build_name,
             }
 

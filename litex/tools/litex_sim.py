@@ -227,8 +227,9 @@ class SimSoC(SoCCore):
                 hw_mac     = etherbone_mac_address)
 
             # SoftCPU
-            self.add_memory_region("ethmac", self.mem_map.get("ethmac", None), 0x2000, type="io")
-            self.add_wb_slave(self.mem_regions["ethmac"].origin, self.ethmac.bus, 0x2000)
+            ethmac_region_size = (ethmac.rx_slots.constant + ethmac.tx_slots.constant)*ethmac.slot_size.constant
+            ethmac_region = SoCRegion(origin=self.mem_map.get("ethmac", None), size=ethmac_region_size, cached=False)
+            self.bus.add_slave(name="ethmac", slave=ethmac.bus, region=ethmac_region)
             if self.irq.enabled:
                 self.irq.add("ethmac", use_loc_if_exists=True)
             # HW ethernet
@@ -248,9 +249,10 @@ class SimSoC(SoCCore):
                 dw         = 64 if ethernet_phy_model == "xgmii" else 32,
                 interface  = "wishbone",
                 endianness = self.cpu.endianness)
+            # Compute Regions size and add it to the SoC.
             ethmac_region_size = (ethmac.rx_slots.constant + ethmac.tx_slots.constant)*ethmac.slot_size.constant
-            self.add_memory_region("ethmac", self.mem_map.get("ethmac", None), ethmac_region_size, type="io")
-            self.add_wb_slave(self.mem_regions["ethmac"].origin, ethmac.bus, ethmac_region_size)
+            ethmac_region = SoCRegion(origin=self.mem_map.get("ethmac", None), size=ethmac_region_size, cached=False)
+            self.bus.add_slave(name="ethmac", slave=ethmac.bus, region=ethmac_region)
             if self.irq.enabled:
                 self.irq.add("ethmac", use_loc_if_exists=True)
 
@@ -403,7 +405,8 @@ def main():
 
     # Configuration --------------------------------------------------------------------------------
 
-    cpu = CPUS.get(soc_kwargs.get("cpu_type", "vexriscv"))
+    cpu            = CPUS.get(soc_kwargs.get("cpu_type", "vexriscv"))
+    bus_data_width = int(soc_kwargs["bus_data_width"])
 
     # UART.
     if soc_kwargs["uart_name"] == "serial":
@@ -412,7 +415,10 @@ def main():
 
     # ROM.
     if args.rom_init:
-        soc_kwargs["integrated_rom_init"] = get_mem_data(args.rom_init, endianness=cpu.endianness)
+        soc_kwargs["integrated_rom_init"] = get_mem_data(args.rom_init,
+            data_width = bus_data_width,
+            endianness = cpu.endianness
+        )
 
     # RAM / SDRAM.
     ram_boot_offset  = 0x40000000 # FIXME
@@ -420,8 +426,12 @@ def main():
     soc_kwargs["integrated_main_ram_size"] = args.integrated_main_ram_size
     if args.integrated_main_ram_size:
         if args.ram_init is not None:
-            soc_kwargs["integrated_main_ram_init"] = get_mem_data(args.ram_init, endianness=cpu.endianness, offset=ram_boot_offset)
-            ram_boot_address                       = get_boot_address(args.ram_init)
+            soc_kwargs["integrated_main_ram_init"] = get_mem_data(args.ram_init,
+                data_width = bus_data_width,
+                endianness = cpu.endianness,
+                offset     = ram_boot_offset
+            )
+            ram_boot_address = get_boot_address(args.ram_init)
     elif args.with_sdram:
         assert args.ram_init is None
         soc_kwargs["sdram_module"]     = args.sdram_module
@@ -430,7 +440,11 @@ def main():
         if args.sdram_from_spd_dump:
             soc_kwargs["sdram_spd_data"] = parse_spd_hexdump(args.sdram_from_spd_dump)
         if args.sdram_init is not None:
-            soc_kwargs["sdram_init"] = get_mem_data(args.sdram_init, endianness=cpu.endianness, offset=ram_boot_offset)
+            soc_kwargs["sdram_init"] = get_mem_data(args.sdram_init,
+                data_width = bus_data_width,
+                endianness = cpu.endianness,
+                offset     = ram_boot_offset
+            )
             ram_boot_address         = get_boot_address(args.sdram_init)
 
     # Ethernet.

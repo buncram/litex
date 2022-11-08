@@ -98,12 +98,16 @@ class NaxRiscv(CPU):
         cpu_group.add_argument("--xlen",          default=32,          help="Specify the RISC-V data width.")
         cpu_group.add_argument("--with-jtag-tap", action="store_true", help="Add a embedded JTAG tap for debugging")
         cpu_group.add_argument("--with-jtag-instruction", action="store_true", help="Add a JTAG instruction port which implement tunneling for debugging (TAP not included)")
+        cpu_group.add_argument("--update-repo",   default="recommended", choices=["latest","wipe+latest","recommended","wipe+recommended","no"], help="Specify how the NaxRiscv & SpinalHDL repo should be updated (latest: update to HEAD, recommended: Update to known compatible version, no: Don't update, wipe+*: Do clean&reset before checkout)")
+        cpu_group.add_argument("--no-netlist-cache", action="store_true", help="Always (re-)build the netlist")
 
     @staticmethod
     def args_read(args):
         print(args)
         NaxRiscv.jtag_tap = args.with_jtag_tap
         NaxRiscv.jtag_instruction = args.with_jtag_instruction
+        NaxRiscv.update_repo = args.update_repo
+        NaxRiscv.no_netlist_cache = args.no_netlist_cache
         if args.scala_file:
             NaxRiscv.scala_files = args.scala_file
         if args.scala_args:
@@ -123,8 +127,8 @@ class NaxRiscv(CPU):
         self.human_name       = self.human_name
         self.reset            = Signal()
         self.interrupt        = Signal(32)
-        self.ibus             = ibus = axi.AXILiteInterface(address_width=32, data_width=64)
-        self.dbus             = dbus = axi.AXILiteInterface(address_width=32, data_width=64)
+        self.ibus             = ibus = axi.AXILiteInterface(address_width=32, data_width=32)
+        self.dbus             = dbus = axi.AXILiteInterface(address_width=32, data_width=32)
 
         self.periph_buses     = [ibus, dbus] # Peripheral buses (Connected to main SoC's bus).
         self.memory_buses     = []           # Memory buses (Connected directly to LiteDRAM).
@@ -196,6 +200,7 @@ class NaxRiscv(CPU):
         md5_hash.update(str(NaxRiscv.xlen).encode('utf-8'))
         md5_hash.update(str(NaxRiscv.jtag_tap).encode('utf-8'))
         md5_hash.update(str(NaxRiscv.jtag_instruction).encode('utf-8'))
+        md5_hash.update(str(NaxRiscv.memory_regions).encode('utf-8'))
         for args in NaxRiscv.scala_args:
             md5_hash.update(args.encode('utf-8'))
         for file in NaxRiscv.scala_paths:
@@ -217,8 +222,11 @@ class NaxRiscv(CPU):
                 options = dir
             ), shell=True)
             # Use specific SHA1 (Optional).
+        print(f"Updating {name} Git repository...")
         os.chdir(os.path.join(dir))
-        os.system(f"cd {dir} && git checkout {branch} && git pull && git checkout {hash}")
+        wipe_cmd = "&& git clean --force -d -x && git reset --hard" if "wipe" in NaxRiscv.update_repo else ""
+        checkout_cmd = f"&& git checkout {hash}" if hash is not None else ""
+        subprocess.check_call(f"cd {dir} {wipe_cmd} && git checkout {branch} && git pull {checkout_cmd}", shell=True)
 
     # Netlist Generation.
     @staticmethod
@@ -227,14 +235,17 @@ class NaxRiscv(CPU):
         ndir = os.path.join(vdir, "ext", "NaxRiscv")
         sdir = os.path.join(vdir, "ext", "SpinalHDL")
 
-        NaxRiscv.git_setup("NaxRiscv", ndir, "https://github.com/SpinalHDL/NaxRiscv.git"  , "main", "b13c0aad")
-        NaxRiscv.git_setup("SpinalHDL", sdir, "https://github.com/SpinalHDL/SpinalHDL.git", "dev" , "a130f7b7")
+        if NaxRiscv.update_repo != "no":
+            NaxRiscv.git_setup("NaxRiscv", ndir, "https://github.com/SpinalHDL/NaxRiscv.git"  , "main", "518d2713" if NaxRiscv.update_repo=="recommended" else None)
+            NaxRiscv.git_setup("SpinalHDL", sdir, "https://github.com/SpinalHDL/SpinalHDL.git", "dev" , "56400992" if NaxRiscv.update_repo=="recommended" else None)
 
         gen_args = []
         gen_args.append(f"--netlist-name={NaxRiscv.netlist_name}")
         gen_args.append(f"--netlist-directory={vdir}")
         gen_args.append(f"--reset-vector={reset_address}")
         gen_args.append(f"--xlen={NaxRiscv.xlen}")
+        for region in NaxRiscv.memory_regions:
+            gen_args.append(f"--memory-region={region[0]},{region[1]},{region[2]},{region[3]}")
         for args in NaxRiscv.scala_args:
             gen_args.append(f"--scala-args={args}")
         if(NaxRiscv.jtag_tap) :
@@ -256,7 +267,7 @@ class NaxRiscv(CPU):
     def add_sources(self, platform):
         vdir = get_data_mod("cpu", "naxriscv").data_location
         print(f"NaxRiscv netlist : {self.netlist_name}")
-        if not os.path.exists(os.path.join(vdir, self.netlist_name + ".v")):
+        if NaxRiscv.no_netlist_cache or not os.path.exists(os.path.join(vdir, self.netlist_name + ".v")):
             self.generate_netlist(self.reset_address)
 
         # Add RAM.
@@ -395,6 +406,7 @@ class NaxRiscv(CPU):
             o_peripheral_clint_rresp   = clintbus.r.resp,
         )
         soc.bus.add_slave("clint", clintbus, region=soc_region_cls(origin=soc.mem_map.get("clint"), size=0x1_0000, cached=False))
+        self.soc = soc # FIXME: Save SoC instance to retrieve the final mem layout on finalization.
 
     def add_memory_buses(self, address_width, data_width):
         nax_data_width = 64
@@ -463,8 +475,29 @@ class NaxRiscv(CPU):
 
     def do_finalize(self):
         assert hasattr(self, "reset_address")
-
         self.find_scala_files()
+
+        # Generate memory map from CPU perspective
+        # naxriscv modes:
+        # r,w,x,c  : readable, writeable, executable, caching allowed
+        # io       : IO region (Implies P bus, preserve memory order, no dcache)
+        # naxriscv bus:
+        # p        : peripheral
+        # m        : memory
+        NaxRiscv.memory_regions = []
+        for name, region in self.soc.bus.io_regions.items():
+            NaxRiscv.memory_regions.append( (region.origin, region.size, "io", "p") ) # IO is only allowed on the p bus
+        for name, region in self.soc.bus.regions.items():
+            if region.linker: # remove virtual regions
+                continue
+            if len(self.memory_buses) and name == 'main_ram': # m bus
+                bus = "m"
+            else:
+                bus = "p"
+            mode = region.mode
+            mode += "c" if region.cached else ""
+            NaxRiscv.memory_regions.append( (region.origin, region.size, mode, bus) )
+
         self.generate_netlist_name(self.reset_address)
 
         # Do verilog instance.

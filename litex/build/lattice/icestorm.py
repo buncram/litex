@@ -17,7 +17,7 @@ from migen.fhdl.structure import _Fragment
 from litex.build.generic_platform import *
 from litex.build import tools
 from litex.build.lattice import common
-from litex.build.yosys_nextpnr_toolchain import YosysNextPNRToolchain
+from litex.build.yosys_nextpnr_toolchain import YosysNextPNRToolchain, yosys_nextpnr_args, yosys_nextpnr_argdict
 
 # LatticeIceStormToolchain -------------------------------------------------------------------------
 
@@ -100,20 +100,16 @@ class LatticeIceStormToolchain(YosysNextPNRToolchain):
         tool_options = {
             "icepack_options": ["-s"],
             "yosys_synth_options": self._synth_opts.split(' '),
-            "nextpnr_options": self._pnr_opts.split(' '),
+            "nextpnr_options": self.pnr_opts.split(' '),
         }
-        return ("icestorm", tool_options)
+        return ("icestorm", {"tool_options": {"icestorm": tool_options}})
 
 
 def icestorm_args(parser):
-    toolchain_group = parser.add_argument_group(title="Toolchain options")
-    toolchain_group.add_argument("--nextpnr-timingstrict", action="store_true", help="Make the build fail when Timing is not met.")
-    toolchain_group.add_argument("--nextpnr-ignoreloops",  action="store_true", help="Use strict Timing mode (Build will fail when Timings are not met).")
-    toolchain_group.add_argument("--nextpnr-seed",         default=1, type=int, help="Set Nextpnr's seed.")
+    toolchain_group = parser.add_argument_group(title="Icestorm toolchain options")
+    yosys_nextpnr_args(toolchain_group)
 
 def icestorm_argdict(args):
     return {
-        "timingstrict": args.nextpnr_timingstrict,
-        "ignoreloops":  args.nextpnr_ignoreloops,
-        "seed":         args.nextpnr_seed,
+        **yosys_nextpnr_argdict(args),
     }

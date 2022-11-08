@@ -11,13 +11,12 @@
 
 from math import log2
 
-from functools import reduce
-from operator import or_
-
 from migen import *
 from migen.genlib import roundrobin
 from migen.genlib.record import *
 from migen.genlib.misc import split, displacer, chooser, WaitTimer
+
+from litex.gen import *
 
 from litex.build.generic_platform import *
 
@@ -46,9 +45,12 @@ CTI_BURST_END          = 0b111
 
 
 class Interface(Record):
-    def __init__(self, data_width=32, adr_width=30, bursting=False):
+    def __init__(self, data_width=32, adr_width=30, bursting=False, **kwargs):
         self.data_width = data_width
-        self.adr_width  = adr_width
+        if kwargs.get("address_width", False):
+            # FIXME: Improve or switch Wishbone to byte addressing instead of word addressing.
+            adr_width = kwargs["address_width"] - int(log2(data_width//8))
+        self.adr_width = adr_width
         self.bursting   = bursting
         Record.__init__(self, set_layout_parameters(_layout,
             adr_width  = adr_width,
@@ -147,7 +149,12 @@ class InterconnectPointToPoint(Module):
 
 
 class Arbiter(Module):
-    def __init__(self, masters, target):
+    def __init__(self, masters=None, target=None, controllers=None):
+        assert target is not None
+        assert (masters is not None) or (controllers is not None)
+        if controllers is not None:
+            masters = controllers
+
         self.submodules.rr = roundrobin.RoundRobin(len(masters))
 
         # mux master->slave signals
@@ -204,13 +211,13 @@ class Decoder(Module):
 
         # generate master ack (resp. err) by ORing all slave acks (resp. errs)
         self.comb += [
-            master.ack.eq(reduce(or_, [slave[1].ack for slave in slaves])),
-            master.err.eq(reduce(or_, [slave[1].err for slave in slaves]))
+            master.ack.eq(Reduce("OR", [slave[1].ack for slave in slaves])),
+            master.err.eq(Reduce("OR", [slave[1].err for slave in slaves]))
         ]
 
         # mux (1-hot) slave data return
         masked = [Replicate(slave_sel_r[i], len(master.dat_r)) & slaves[i][1].dat_r for i in range(ns)]
-        self.comb += master.dat_r.eq(reduce(or_, masked))
+        self.comb += master.dat_r.eq(Reduce("OR", masked))
 
 
 class InterconnectShared(Module):

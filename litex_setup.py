@@ -16,7 +16,7 @@ python3      = sys.executable
 
 # Helpers ------------------------------------------------------------------------------------------
 
-def colorer(s, color="bright"): # FIXME: Move colorer to litex.common?
+def colorer(s, color="bright"):
     header  = {
         "bright"    : "\x1b[1m",
         "green"     : "\x1b[1m\x1b[32m",
@@ -112,7 +112,7 @@ git_repos = {
     "pythondata-cpu-marocchino":   GitRepo(url="https://github.com/litex-hub/"),
 
     # OpenPower CPU(s).
-    "pythondata-cpu-microwatt":    GitRepo(url="https://github.com/litex-hub/", sha1=0xb940b55acff),
+    "pythondata-cpu-microwatt":    GitRepo(url="https://github.com/litex-hub/", sha1=0xb4986b23af6),
 
     # RISC-V CPU(s).
     "pythondata-cpu-blackparrot":  GitRepo(url="https://github.com/litex-hub/"),

@@ -62,6 +62,15 @@ class NextPNRWrapper():
                 if value != "":
                     self._pnr_opts += f"--{key} {value} "
 
+    @property
+    def pnr_opts(self):
+        """return PNR configuration options
+        Returns
+        =======
+        str containing configuration options passed to nextpnr-xxx
+        """
+        return self._pnr_opts
+
     def get_call(self, target="script"):
         """built a script command or a Makefile rule + command
 
@@ -92,3 +101,15 @@ class NextPNRWrapper():
             return base_cmd
         else:
             raise ValueError("Invalid target type")
+
+def nextpnr_args(parser):
+    parser.add_argument("--nextpnr-timingstrict", action="store_true", help="Use strict Timing mode (Build will fail when Timings are not met).")
+    parser.add_argument("--nextpnr-ignoreloops",  action="store_true", help="Ignore combinatorial loops in Timing Analysis.")
+    parser.add_argument("--nextpnr-seed",         default=1, type=int, help="Set Nextpnr's seed.")
+
+def nextpnr_argdict(args):
+    return {
+        "timingstrict": args.nextpnr_timingstrict,
+        "ignoreloops":  args.nextpnr_ignoreloops,
+        "seed":         args.nextpnr_seed,
+    }
