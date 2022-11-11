@@ -13,7 +13,8 @@ from litex.soc.cores.cpu import CPU, CPU_GCC_TRIPLE_RISCV32
 from litex.soc.interconnect.csr import *
 from litex.soc.interconnect import axi
 from litex.soc.interconnect import wishbone
-from litex.soc.integration.soc import SoCRegion
+from litex.soc.integration.soc import SoCRegion, SoCIORegion
+from litex.soc.integration.soc import SoCBusHandler
 
 class Open(Signal): pass
 
@@ -61,10 +62,10 @@ class VexRiscvAxi(CPU):
     @property
     def mem_map(self):
         return {
-            "rom"      : 0x6000_0000,
-            "sram"     : 0x2000_0000,
-            "main_ram" : 0x6100_0000,
-            "csr"      : 0xa000_0000,
+            "reram"     : 0x6000_0000, # +3M
+            "sram"      : 0x6100_0000, # +2M
+            "csr"      : 0xa000_0000,  # unused
+            "p_bus"    : 0x4000_0000,  # for Daric peripherals + Litex peripherals (need to divide up the space more finely)
         }
 
     # GCC Flags.
@@ -84,17 +85,33 @@ class VexRiscvAxi(CPU):
 
         # Create AXI-Full Interfaces.
         self.ibus_axi   =  ibus = axi.AXIInterface(data_width=64, address_width=32, id_width = 1)
-        self.dbus_axi   =  dbus = axi.AXIInterface(data_width=32, address_width=32, id_width = 1)
+        self.dbus_axi   = axi.AXIInterface(data_width=32, address_width=32, id_width = 1)
 
         # Create AXI-Lite Interfaces.
-        self.dbus             = dbus_lite = axi.AXILiteInterface(data_width=32, address_width=32)
+        # Create a crossbar to split out the axi-lite bus on the d-bus
+        self.d_xbar = SoCBusHandler(
+            name                  = "PAxiLiteXbar",
+            standard              = "axi",
+            data_width            = 32,
+            address_width         = 32,
+            bursting              = True,
+            interconnect          = "crossbar",
+            interconnect_register = True,
+        )
+        #self.d_xbar.io_regions = self.io_regions
+        #self.d_xbar.mem_map = self.mem_map
+        self.d_xbar.add_master(master=self.dbus_axi)
 
-        # Adapt AXI interfaces to AXILite.
-        self.submodules += axi.AXI2AXILite(dbus, dbus_lite)
+        dbus = axi.AXIInterface(data_width=32, address_width=32, id_width=1)
+        dbus_lite = axi.AXILiteInterface(data_width=32, address_width=32)
+
+        p_region = SoCIORegion(self.mem_map["p_bus"], size =0x2000_0000, mode = "rw", cached = False)
+        self.d_xbar.add_slave("peripherals", dbus_lite, p_region)
+        self.d_xbar.add_slave("reram", dbus, SoCRegion(self.mem_map["reram"], size = 5 * 1024 * 1024, mode = "rw", cached = True)) # cover reram + sram
 
         # Expose AXI-Lite Interfaces.
         self.periph_buses     = [dbus_lite] # Peripheral buses (Connected to main SoC's bus).
-        self.memory_buses     = [['ibus', ibus], ['dbus', dbus]]   # Memory buses (Connected directly to LiteDRAM).
+        self.memory_buses     = [['ibus', ibus], ['dbus', dbus]]   # Memory buses (Connected directly to crossbar to main memory).
 
         # CPU Instance.
         self.cpu_params = dict(
@@ -140,7 +157,7 @@ class VexRiscvAxi(CPU):
             o_iBusAxi_ar_payload_size  = ibus.ar.size,
             o_iBusAxi_ar_payload_id    = ibus.ar.id, # not on M3
             o_iBusAxi_ar_payload_qos   = ibus.ar.qos, # not on M3
-            o_iBusAxi_ar_payload_region = Open(), # ibus.ar.region, # not on M3
+            o_iBusAxi_ar_payload_region = ibus.ar.region, # not on M3
 
             i_iBusAxi_r_valid          = ibus.r.valid,
             o_iBusAxi_r_ready          = ibus.r.ready,
@@ -160,7 +177,7 @@ class VexRiscvAxi(CPU):
             o_dBusAxi_aw_payload_prot  = dbus.aw.prot,
             o_dBusAxi_aw_payload_size  = dbus.aw.size,
             o_dBusAxi_aw_payload_id    = dbus.aw.id, # not on M3
-            o_dBusAxi_aw_payload_region = Open(), # dbus.aw.region, # not on M3
+            o_dBusAxi_aw_payload_region = dbus.aw.region, # not on M3
             o_dBusAxi_aw_payload_qos   = dbus.aw.qos, # not on M3
 
             o_dBusAxi_w_valid          = dbus.w.valid,
@@ -184,7 +201,7 @@ class VexRiscvAxi(CPU):
             o_dBusAxi_ar_payload_prot  = dbus.ar.prot,
             o_dBusAxi_ar_payload_size  = dbus.ar.size,
             o_dBusAxi_ar_payload_id    = dbus.ar.id, # not on M3
-            o_dBusAxi_ar_payload_region = Open(), # dbus.ar.region, # not on M3
+            o_dBusAxi_ar_payload_region = dbus.ar.region, # not on M3
             o_dBusAxi_ar_payload_qos   = dbus.ar.qos, # not oon M3
 
             i_dBusAxi_r_valid          = dbus.r.valid,
@@ -311,14 +328,15 @@ class VexRiscvAxi(CPU):
 
     def add_soc_components(self, soc, soc_region_cls):
         # Connect Debug interface to SoC.
-        if "debug" in self.variant:
-            soc.bus.add_slave("vexriscv_debug", self.debug_bus, region=
-                soc_region_cls(
-                    origin = soc.mem_map.get("vexriscv_debug"),
-                    size   = 0x100,
-                    cached = False
-                )
-            )
+        # I think this is not needed because of the way the debug was instantiated by the Vex generator...
+        # if "debug" in self.variant:
+        #     soc.bus.add_slave("vexriscv_debug", self.debug_bus, region=
+        #         soc_region_cls(
+        #             origin = soc.mem_map.get("vexriscv_debug"),
+        #             size   = 0x100,
+        #             cached = False
+        #         )
+        #     )
 
         # Pass I/D Caches info to software.
         base_variant = str(self.variant.split('+')[0])
