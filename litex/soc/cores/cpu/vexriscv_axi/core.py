@@ -107,7 +107,7 @@ class VexRiscvAxi(CPU):
 
         p_region = SoCIORegion(self.mem_map["p_bus"], size =0x2000_0000, mode = "rw", cached = False)
         self.d_xbar.add_slave("peripherals", dbus_lite, p_region)
-        self.d_xbar.add_slave("reram", dbus, SoCRegion(self.mem_map["reram"], size = 5 * 1024 * 1024, mode = "rw", cached = True)) # cover reram + sram
+        self.d_xbar.add_slave("reram", dbus, SoCRegion(self.mem_map["reram"], size = 0x4000_0000, mode = "rwx", cached = True))
 
         # Expose AXI-Lite Interfaces.
         self.periph_buses     = [dbus_lite] # Peripheral buses (Connected to main SoC's bus).
