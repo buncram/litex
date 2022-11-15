@@ -62,10 +62,10 @@ class VexRiscvAxi(CPU):
     @property
     def mem_map(self):
         return {
-            "reram"     : 0x6000_0000, # +3M
-            "sram"      : 0x6100_0000, # +2M
-            "csr"      : 0xa000_0000,  # unused
-            "p_bus"    : 0x4000_0000,  # for Daric peripherals + Litex peripherals (need to divide up the space more finely)
+            "memory"   : 0x6000_0000, # 0x2000_0000
+            "norflash" : 0x8000_0000, # 0x2000_0000 currently not connected!
+            "periph"   : 0x4000_0000, # for Daric peripherals + Litex peripherals (need to divide up the space more finely)
+            "csr"      : 0x5800_0000, # put RISCV-specific CSRs in the upper region of Daric I/O
         }
 
     # GCC Flags.
@@ -98,20 +98,26 @@ class VexRiscvAxi(CPU):
             interconnect          = "crossbar",
             interconnect_register = True,
         )
-        #self.d_xbar.io_regions = self.io_regions
-        #self.d_xbar.mem_map = self.mem_map
-        self.d_xbar.add_master(master=self.dbus_axi)
+        self.submodules.d_xbar = self.d_xbar
+        self.d_xbar.add_master(name="cpu_dbus", master=self.dbus_axi)
 
         dbus = axi.AXIInterface(data_width=32, address_width=32, id_width=1)
         dbus_lite = axi.AXILiteInterface(data_width=32, address_width=32)
 
-        p_region = SoCIORegion(self.mem_map["p_bus"], size =0x2000_0000, mode = "rw", cached = False)
-        self.d_xbar.add_slave("peripherals", dbus_lite, p_region)
-        self.d_xbar.add_slave("reram", dbus, SoCRegion(self.mem_map["reram"], size = 0x4000_0000, mode = "rwx", cached = True))
+        self.d_xbar.add_slave(
+            name="peripherals",
+            slave=dbus_lite,
+            region=SoCRegion(self.mem_map["periph"], size =0x2000_0000, mode = "rw", cached = True) # THIS IS A LIE, it's actually not cached. Need to add a check/test for the differential of cached v uncached because the definition is out-of-band from LiteX
+        )
+        self.d_xbar.add_slave(
+            name="memory",
+            slave=dbus,
+            region=SoCRegion(self.mem_map["memory"], size = 0x2000_0000, mode = "rwx", cached = True)
+        )
 
         # Expose AXI-Lite Interfaces.
-        self.periph_buses     = [dbus_lite] # Peripheral buses (Connected to main SoC's bus).
-        self.memory_buses     = [['ibus', ibus], ['dbus', dbus]]   # Memory buses (Connected directly to crossbar to main memory).
+        self.periph_buses     = [] # Peripheral buses (Connected to main SoC's bus). Leave blank because we don't want any bus to me inferred for the core generation.
+        self.memory_buses     = [['ibus', ibus], ['dbus', dbus], ['pbus', dbus_lite]]   # Memory buses (Connected directly to crossbar to main memory).
 
         # CPU Instance.
         self.cpu_params = dict(
@@ -167,49 +173,49 @@ class VexRiscvAxi(CPU):
             i_iBusAxi_r_payload_id     = ibus.r.id, # not on M3
 
             # Data Bus (AXI).
-            o_dBusAxi_aw_valid         = dbus.aw.valid,
-            i_dBusAxi_aw_ready         = dbus.aw.ready,
-            o_dBusAxi_aw_payload_addr  = dbus.aw.addr,
-            o_dBusAxi_aw_payload_burst = dbus.aw.burst,
-            o_dBusAxi_aw_payload_cache = dbus.aw.cache,
-            o_dBusAxi_aw_payload_len   = dbus.aw.len,
-            o_dBusAxi_aw_payload_lock  = dbus.aw.lock,
-            o_dBusAxi_aw_payload_prot  = dbus.aw.prot,
-            o_dBusAxi_aw_payload_size  = dbus.aw.size,
-            o_dBusAxi_aw_payload_id    = dbus.aw.id, # not on M3
-            o_dBusAxi_aw_payload_region = dbus.aw.region, # not on M3
-            o_dBusAxi_aw_payload_qos   = dbus.aw.qos, # not on M3
+            o_dBusAxi_aw_valid          = self.dbus_axi.aw.valid,
+            i_dBusAxi_aw_ready          = self.dbus_axi.aw.ready,
+            o_dBusAxi_aw_payload_addr   = self.dbus_axi.aw.addr,
+            o_dBusAxi_aw_payload_burst  = self.dbus_axi.aw.burst,
+            o_dBusAxi_aw_payload_cache  = self.dbus_axi.aw.cache,
+            o_dBusAxi_aw_payload_len    = self.dbus_axi.aw.len,
+            o_dBusAxi_aw_payload_lock   = self.dbus_axi.aw.lock,
+            o_dBusAxi_aw_payload_prot   = self.dbus_axi.aw.prot,
+            o_dBusAxi_aw_payload_size   = self.dbus_axi.aw.size,
+            o_dBusAxi_aw_payload_id     = self.dbus_axi.aw.id, # not on M3
+            o_dBusAxi_aw_payload_region = self.dbus_axi.aw.region, # not on M3
+            o_dBusAxi_aw_payload_qos    = self.dbus_axi.aw.qos, # not on M3
 
-            o_dBusAxi_w_valid          = dbus.w.valid,
-            i_dBusAxi_w_ready          = dbus.w.ready,
-            o_dBusAxi_w_payload_last   = dbus.w.last,
-            o_dBusAxi_w_payload_strb   = dbus.w.strb,
-            o_dBusAxi_w_payload_data   = dbus.w.data,
+            o_dBusAxi_w_valid           = self.dbus_axi.w.valid,
+            i_dBusAxi_w_ready           = self.dbus_axi.w.ready,
+            o_dBusAxi_w_payload_last    = self.dbus_axi.w.last,
+            o_dBusAxi_w_payload_strb    = self.dbus_axi.w.strb,
+            o_dBusAxi_w_payload_data    = self.dbus_axi.w.data,
 
-            i_dBusAxi_b_valid          = dbus.b.valid,
-            o_dBusAxi_b_ready          = dbus.b.ready,
-            i_dBusAxi_b_payload_resp   = dbus.b.resp,
-            i_dBusAxi_b_payload_id     = dbus.b.id, # not on M3
+            i_dBusAxi_b_valid           = self.dbus_axi.b.valid,
+            o_dBusAxi_b_ready           = self.dbus_axi.b.ready,
+            i_dBusAxi_b_payload_resp    = self.dbus_axi.b.resp,
+            i_dBusAxi_b_payload_id      = self.dbus_axi.b.id, # not on M3
 
-            o_dBusAxi_ar_valid         = dbus.ar.valid,
-            i_dBusAxi_ar_ready         = dbus.ar.ready,
-            o_dBusAxi_ar_payload_addr  = dbus.ar.addr,
-            o_dBusAxi_ar_payload_burst = dbus.ar.burst,
-            o_dBusAxi_ar_payload_cache = dbus.ar.cache,
-            o_dBusAxi_ar_payload_len   = dbus.ar.len,
-            o_dBusAxi_ar_payload_lock  = dbus.ar.lock,
-            o_dBusAxi_ar_payload_prot  = dbus.ar.prot,
-            o_dBusAxi_ar_payload_size  = dbus.ar.size,
-            o_dBusAxi_ar_payload_id    = dbus.ar.id, # not on M3
-            o_dBusAxi_ar_payload_region = dbus.ar.region, # not on M3
-            o_dBusAxi_ar_payload_qos   = dbus.ar.qos, # not oon M3
+            o_dBusAxi_ar_valid          = self.dbus_axi.ar.valid,
+            i_dBusAxi_ar_ready          = self.dbus_axi.ar.ready,
+            o_dBusAxi_ar_payload_addr   = self.dbus_axi.ar.addr,
+            o_dBusAxi_ar_payload_burst  = self.dbus_axi.ar.burst,
+            o_dBusAxi_ar_payload_cache  = self.dbus_axi.ar.cache,
+            o_dBusAxi_ar_payload_len    = self.dbus_axi.ar.len,
+            o_dBusAxi_ar_payload_lock   = self.dbus_axi.ar.lock,
+            o_dBusAxi_ar_payload_prot   = self.dbus_axi.ar.prot,
+            o_dBusAxi_ar_payload_size   = self.dbus_axi.ar.size,
+            o_dBusAxi_ar_payload_id     = self.dbus_axi.ar.id, # not on M3
+            o_dBusAxi_ar_payload_region = self.dbus_axi.ar.region, # not on M3
+            o_dBusAxi_ar_payload_qos    = self.dbus_axi.ar.qos, # not oon M3
 
-            i_dBusAxi_r_valid          = dbus.r.valid,
-            o_dBusAxi_r_ready          = dbus.r.ready,
-            i_dBusAxi_r_payload_last   = dbus.r.last,
-            i_dBusAxi_r_payload_resp   = dbus.r.resp,
-            i_dBusAxi_r_payload_data   = dbus.r.data,
-            i_dBusAxi_r_payload_id     = dbus.r.id, # not on M3
+            i_dBusAxi_r_valid           = self.dbus_axi.r.valid,
+            o_dBusAxi_r_ready           = self.dbus_axi.r.ready,
+            i_dBusAxi_r_payload_last    = self.dbus_axi.r.last,
+            i_dBusAxi_r_payload_resp    = self.dbus_axi.r.resp,
+            i_dBusAxi_r_payload_data    = self.dbus_axi.r.data,
+            i_dBusAxi_r_payload_id      = self.dbus_axi.r.id, # not on M3
         )
         platform.add_source_dir("deps/pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog/VexRiscv_CranSoC.v")
 
