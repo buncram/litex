@@ -76,7 +76,7 @@ class VexRiscvAxi(CPU):
         return flags
 
     def __init__(self, platform, variant="standard-debug", with_timer=False):
-        self.platform     = platform
+        self.platform         = platform
         self.variant          = variant
         self.human_name       = "VexRiscvAxi4"
         self.external_variant = None
