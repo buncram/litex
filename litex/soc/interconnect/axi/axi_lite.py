@@ -135,9 +135,8 @@ def axi_lite_to_simple(axi_lite, port_adr, port_dat_r, port_dat_w=None, port_we=
                 comb.append(port_we[i].eq(axi_lite.w.valid & axi_lite.w.ready & axi_lite.w.strb[i]))
         else:
             comb.append(port_we.eq(axi_lite.w.valid & axi_lite.w.ready & (axi_lite.w.strb != 0)))
-
-    fsm = FSM()
-    fsm.act("START-TRANSACTION",
+    # Compute do_write/do_read as `comb`, so they do not affect the sensitivity list of the FSM
+    comb += [
         # If the last access was a read, do a write, and vice versa.
         If(axi_lite.aw.valid & axi_lite.ar.valid,
             do_write.eq(last_was_read),
@@ -146,6 +145,9 @@ def axi_lite_to_simple(axi_lite, port_adr, port_dat_r, port_dat_w=None, port_we=
             do_write.eq(axi_lite.aw.valid),
             do_read.eq(axi_lite.ar.valid),
         ),
+    ]
+    fsm = FSM()
+    fsm.act("START-TRANSACTION",
         # Start reading/writing immediately not to waste a cycle.
         If(do_write,
             port_adr.eq(axi_lite.aw.addr[adr_shift:]),
@@ -536,7 +538,7 @@ class AXILiteTimeout(Module):
                 timer.wait.eq(wait_cond),
                 # done is updated in `sync`, so we must make sure that `ready` has not been issued
                 # by slave during that single cycle, by checking `timer.wait`.
-                If(timer.done & timer.wait,
+                If(timer.done & wait_cond, # timer.wait.eq(wait_cond)
                     error.eq(1),
                     NextState("RESPOND")
                 )
@@ -553,7 +555,7 @@ class AXILiteTimeout(Module):
                 master.w.ready.eq(master.w.valid),
                 master.b.valid.eq(~master.aw.valid & ~master.w.valid),
                 master.b.resp.eq(RESP_SLVERR),
-                If(master.b.valid & master.b.ready,
+                If((~master.aw.valid & ~master.w.valid) & master.b.ready, # master.b.valid.eq(~master.aw.valid & ~master.w.valid)
                     NextState("WAIT")
                 )
             ])
@@ -567,7 +569,7 @@ class AXILiteTimeout(Module):
                 master.r.valid.eq(~master.ar.valid),
                 master.r.resp.eq(RESP_SLVERR),
                 master.r.data.eq(2**len(master.r.data) - 1),
-                If(master.r.valid & master.r.ready,
+                If(~master.ar.valid & master.r.ready, # master.ar.ready.eq(master.ar.valid),
                     NextState("WAIT")
                 )
             ])
@@ -745,6 +747,17 @@ class AXILiteDecoder(Module):
 
 # AXI-Lite Interconnect ----------------------------------------------------------------------------
 
+def get_check_parameters(ports):
+    # FIXME: Add adr_width check.
+
+    # Data-Width.
+    data_width = ports[0].data_width
+    if len(ports) > 1:
+        for port in ports[1:]:
+            assert port.data_width == data_width
+
+    return data_width
+
 class AXILiteInterconnectPointToPoint(Module):
     """AXI Lite point to point interconnect"""
     def __init__(self, master, slave):
@@ -753,7 +766,8 @@ class AXILiteInterconnectPointToPoint(Module):
 class AXILiteInterconnectShared(Module):
     """AXI Lite shared interconnect"""
     def __init__(self, masters, slaves, register=False, timeout_cycles=1e6):
-        shared = AXILiteInterface(data_width=masters[0].data_width)
+        data_width = get_check_parameters(ports=masters + [s for _, s in slaves])
+        shared = AXILiteInterface(data_width=data_width)
         self.submodules.arbiter = AXILiteArbiter(masters, shared)
         self.submodules.decoder = AXILiteDecoder(shared, slaves)
         if timeout_cycles is not None:
@@ -765,8 +779,9 @@ class AXILiteCrossbar(Module):
     MxN crossbar for M masters and N slaves.
     """
     def __init__(self, masters, slaves, register=False, timeout_cycles=1e6):
+        data_width = get_check_parameters(ports=masters + [s for _, s in slaves])
         matches, busses = zip(*slaves)
-        access_m_s = [[AXILiteInterface() for j in slaves] for i in masters]  # a[master][slave]
+        access_m_s = [[AXILiteInterface(data_width=data_width) for j in slaves] for i in masters]  # a[master][slave]
         access_s_m = list(zip(*access_m_s))  # a[slave][master]
         # Decode each master into its access row.
         for slaves, master in zip(access_m_s, masters):
