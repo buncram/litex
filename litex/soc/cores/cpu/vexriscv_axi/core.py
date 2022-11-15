@@ -87,10 +87,9 @@ class VexRiscvAxi(CPU):
         self.ibus_axi   =  ibus = axi.AXIInterface(data_width=64, address_width=32, id_width = 1)
         self.dbus_axi   = axi.AXIInterface(data_width=32, address_width=32, id_width = 1)
 
-        # Create AXI-Lite Interfaces.
-        # Create a crossbar to split out the axi-lite bus on the d-bus
+        # Create a crossbar to split out the AXI-full dbus to an axi-lite p-bus and an AXI-full dbus
         self.d_xbar = SoCBusHandler(
-            name                  = "PAxiLiteXbar",
+            name                  = "DbusXbar",
             standard              = "axi",
             data_width            = 32,
             address_width         = 32,
