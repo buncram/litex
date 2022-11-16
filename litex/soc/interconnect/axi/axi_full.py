@@ -216,6 +216,9 @@ class AXIUpConverter(Module):
         self.submodules += w_converter
         self.comb += axi_from.w.connect(w_converter.sink, omit={"id", "dest", "user"})
         self.comb += w_converter.source.connect(axi_to.w)
+        self.comb += w_converter.aw.eq(axi_to.aw.addr)
+        self.comb += w_converter.aw_valid.eq(axi_to.aw.valid)
+        self.comb += w_converter.aw_ready.eq(axi_to.aw.ready)
         self.comb += axi_to.w.id.eq(axi_from.w.id)
         self.comb += axi_to.w.dest.eq(axi_from.w.dest)
         self.comb += axi_to.w.user.eq(axi_from.w.user)
