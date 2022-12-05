@@ -1529,6 +1529,10 @@ class LiteXSoC(SoC):
                 # Check if bus is an AXI bus and connect it.
                 if isinstance(mem_bus, axi.AXIInterface):
                     data_width_ratio = int(port.data_width/mem_bus.data_width)
+                    if data_width_ratio != 1:
+                        self.logger.warning("Converting MemBus({}) data width to LiteDRAM({}).".format(
+                            colorer(mem_bus.data_width, color="yellow"),
+                            colorer(port.data_width,    color="yellow")))
                     # If same data_width, connect it directly.
                     if data_width_ratio == 1:
                         self.submodules += LiteDRAMAXI2Native(
@@ -1765,14 +1769,14 @@ class LiteXSoC(SoC):
         self.bus.add_slave(name=name, slave=spiflash_core.bus, region=spiflash_region)
 
         # Constants.
-        self.add_constant("SPIFLASH_PHY_FREQUENCY", clk_freq)
-        self.add_constant("SPIFLASH_MODULE_NAME", module.name.upper())
-        self.add_constant("SPIFLASH_MODULE_TOTAL_SIZE", module.total_size)
-        self.add_constant("SPIFLASH_MODULE_PAGE_SIZE", module.page_size)
+        self.add_constant(f"{name}_PHY_FREQUENCY",     clk_freq)
+        self.add_constant(f"{name}_MODULE_NAME",       module.name.upper())
+        self.add_constant(f"{name}_MODULE_TOTAL_SIZE", module.total_size)
+        self.add_constant(f"{name}_MODULE_PAGE_SIZE",  module.page_size)
         if SpiNorFlashOpCodes.READ_1_1_4 in module.supported_opcodes:
-            self.add_constant("SPIFLASH_MODULE_QUAD_CAPABLE")
+            self.add_constant(f"{name}_MODULE_QUAD_CAPABLE")
         if SpiNorFlashOpCodes.READ_4_4_4 in module.supported_opcodes:
-            self.add_constant("SPIFLASH_MODULE_QPI_CAPABLE")
+            self.add_constant(f"{name}_MODULE_QPI_CAPABLE")
 
     # Add SPI SDCard -------------------------------------------------------------------------------
     def add_spi_sdcard(self, name="spisdcard", spi_clk_freq=400e3, with_tristate=False, software_debug=False):
