@@ -16,6 +16,8 @@ from litex.soc.interconnect import wishbone
 from litex.soc.integration.soc import SoCRegion, SoCIORegion
 from litex.soc.integration.soc import SoCBusHandler
 
+from axi_axil_adapter import AXI2AXILiteAdapter
+
 class Open(Signal): pass
 
 # VexRiscv Timer -----------------------------------------------------------------------------------
@@ -95,19 +97,32 @@ class VexRiscvAxi(CPU):
             address_width         = 32,
             bursting              = True,
             interconnect          = "crossbar",
-            interconnect_register = True,
+            interconnect_register = False, # this parameter seems to be ignored and is assumed false
         )
         self.submodules.d_xbar = self.d_xbar
         self.d_xbar.add_master(name="cpu_dbus", master=self.dbus_axi)
 
         dbus = axi.AXIInterface(data_width=32, address_width=32, id_width=1)
-        dbus_lite = axi.AXILiteInterface(data_width=32, address_width=32)
+        if False:
+            # adapt AXI->AXIlite with a verilog module
+            dbus_peri = axi.AXIInterface(data_width=32, address_width=32, id_width=1)
+            dbus_lite = axi.AXILiteInterface(data_width=32, address_width=32)
+            self.submodules += AXI2AXILiteAdapter(platform, dbus_peri, dbus_lite)
 
-        self.d_xbar.add_slave(
-            name="peripherals",
-            slave=dbus_lite,
-            region=SoCRegion(self.mem_map["periph"], size =0x2000_0000, mode = "rw", cached = True) # THIS IS A LIE, it's actually not cached. Need to add a check/test for the differential of cached v uncached because the definition is out-of-band from LiteX
-        )
+            self.d_xbar.add_slave(
+                name="peripherals",
+                slave=dbus_peri,
+                region=SoCRegion(self.mem_map["periph"], size =0x2000_0000, mode = "rw", cached = True) # THIS IS A LIE, it's actually not cached. Need to add a check/test for the differential of cached v uncached because the definition is out-of-band from LiteX
+            )
+        else:
+            # use automatic LiteX inference
+            dbus_lite = axi.AXILiteInterface(data_width=32, address_width=32)
+            self.d_xbar.add_slave(
+                name="peripherals",
+                slave=dbus_lite,
+                region=SoCRegion(self.mem_map["periph"], size =0x2000_0000, mode = "rw", cached = True) # THIS IS A LIE, it's actually not cached. Need to add a check/test for the differential of cached v uncached because the definition is out-of-band from LiteX
+            )
+
         self.d_xbar.add_slave(
             name="memory",
             slave=dbus,
