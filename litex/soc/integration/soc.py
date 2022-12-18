@@ -1199,8 +1199,10 @@ class SoC(LiteXModule, SoCCoreCompat):
         # SoC CSR Interconnect ---------------------------------------------------------------------
         if self.bus.standard == 'axi-lite':
             reg = False
+            use_re = True
         else:
             reg = True
+            use_re = False
         self.csr_bankarray = csr_bus.CSRBankArray(self,
             address_map        = self.csr.address_map,
             data_width         = self.csr.data_width,
@@ -1208,7 +1210,8 @@ class SoC(LiteXModule, SoCCoreCompat):
             alignment          = self.csr.alignment,
             paging             = self.csr.paging,
             ordering           = self.csr.ordering,
-            reg                = reg
+            reg                = reg,
+            use_re             = use_re,
         )
         if len(self.csr.masters):
             self.csr_interconnect = csr_bus.InterconnectShared(
