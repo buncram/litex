@@ -17,6 +17,7 @@ from litex.soc.integration.soc import SoCRegion, SoCIORegion
 from litex.soc.integration.soc import SoCBusHandler
 
 from axi_axil_adapter import AXI2AXILiteAdapter
+from axi_crossbar import AXICrossbar
 
 class Open(Signal): pass
 
@@ -56,7 +57,8 @@ class VexRiscvAxi(CPU):
     variants             = ["standard"]
     io_regions           = {
         # Origin, Length.
-        0x4000_0000 : 0x2000_0000,
+        0x4000_0000 : 0x1000_0000,
+        0x5000_0000 : 0x1000_0000,
         0xa000_0000 : 0x6000_0000,
     }
 
@@ -64,10 +66,10 @@ class VexRiscvAxi(CPU):
     @property
     def mem_map(self):
         return {
-            "memory"   : 0x6000_0000, # 0x2000_0000
-            "norflash" : 0x8000_0000, # 0x2000_0000 currently not connected!
             "periph"   : 0x4000_0000, # for Daric peripherals + Litex peripherals (need to divide up the space more finely)
             "csr"      : 0x5800_0000, # put RISCV-specific CSRs in the upper region of Daric I/O
+            "memory"   : 0x6000_0000, # 0x2000_0000
+            "norflash" : 0x8000_0000, # 0x2000_0000 currently not connected!
         }
 
     # GCC Flags.
@@ -77,7 +79,7 @@ class VexRiscvAxi(CPU):
         flags += " -D__vexriscv__"
         return flags
 
-    def __init__(self, platform, variant="standard-debug", with_timer=False):
+    def __init__(self, platform, variant="standard-debug", with_timer=False, litex_axi=False):
         self.platform         = platform
         self.variant          = variant
         self.human_name       = "VexRiscvAxi4"
@@ -85,53 +87,84 @@ class VexRiscvAxi(CPU):
         self.reset            = Signal()
         self.interrupt        = Signal(32)
 
-        # Create AXI-Full Interfaces.
-        self.ibus_axi   =  ibus = axi.AXIInterface(data_width=64, address_width=32, id_width = 1)
-        self.dbus_axi   = axi.AXIInterface(data_width=32, address_width=32, id_width = 1)
+        # Create AXI-Full Interfaces, attached to the CPU
+        self.ibus_axi   =  ibus = axi.AXIInterface(data_width=64, address_width=32, id_width = 1, bursting=True)
+        self.dbus_axi   = axi.AXIInterface(data_width=32, address_width=32, id_width = 1, bursting=True)
+
+        if not litex_axi:
+            # adapt AXI->AXIlite with a verilog module
+            dbus_peri = axi.AXIInterface(data_width=32, address_width=32, id_width=1, bursting=True)
+            peripherals = axi.AXILiteInterface(data_width=32, address_width=32)
+            self.submodules += AXI2AXILiteAdapter(platform, dbus_peri, peripherals)
+        else:
+            # use automatic LiteX inference
+            peripherals = axi.AXILiteInterface(data_width=32, address_width=32)
+            self.d_xbar.add_slave(
+                name="peripherals",
+                slave=peripherals,
+                region=SoCRegion(self.mem_map["periph"], size=0x1000_0000, mode = "rw", cached = True) # THIS IS A LIE, it's actually not cached. Need to add a check/test for the differential of cached v uncached because the definition is out-of-band from LiteX
+            )
+
+        if not litex_axi:
+            # adapt AXI->AXIlite with a verilog module
+            axi_csr = axi.AXIInterface(data_width=32, address_width=32, id_width=1, bursting=True)
+            corecsr = axi.AXILiteInterface(data_width=32, address_width=32)
+            self.submodules += AXI2AXILiteAdapter(platform, axi_csr, corecsr)
+        else:
+            corecsr = axi.AXILiteInterface(data_width=32, address_width=32)
+            self.d_xbar.add_slave(
+                name="corecsr",
+                slave=corecsr,
+                region=SoCRegion(self.mem_map["csr"], size=0x0200_0000, mode = "rw", cached = True)
+            )
+
+        # This is the dbus downstream of the crossbar, in contrast to dbus_axi, which is connected upstream to the CPU.
+        dbus = axi.AXIInterface(data_width=32, address_width=32, id_width=1, bursting=True)
 
         # Create a crossbar to split out the AXI-full dbus to an axi-lite p-bus and an AXI-full dbus
-        self.d_xbar = SoCBusHandler(
-            name                  = "DbusXbar",
-            standard              = "axi",
-            data_width            = 32,
-            address_width         = 32,
-            bursting              = True,
-            interconnect          = "crossbar",
-            interconnect_register = False, # this parameter seems to be ignored and is assumed false
-        )
-        self.submodules.d_xbar = self.d_xbar
-        self.d_xbar.add_master(name="cpu_dbus", master=self.dbus_axi)
-
-        dbus = axi.AXIInterface(data_width=32, address_width=32, id_width=1)
-        if False:
-            # adapt AXI->AXIlite with a verilog module
-            dbus_peri = axi.AXIInterface(data_width=32, address_width=32, id_width=1)
-            dbus_lite = axi.AXILiteInterface(data_width=32, address_width=32)
-            self.submodules += AXI2AXILiteAdapter(platform, dbus_peri, dbus_lite)
-
+        if not litex_axi:
+            d_xbar = AXICrossbar(platform=platform)
+            self.submodules += d_xbar
+            d_xbar.add_slave(name = "cpu", s_axi=self.dbus_axi)
+            d_xbar.add_master(name = "peripherals", m_axi=dbus_peri, origin=self.mem_map["periph"], size=0x1000_0000)
+            d_xbar.add_master(name = "corecsr", m_axi=axi_csr, origin=self.mem_map["csr"], size=0x0200_0000)
+            d_xbar.add_master(name = "memory", m_axi=dbus, origin=self.mem_map["memory"], size=0x2000_0000)
+        else:
+            self.d_xbar = SoCBusHandler(
+                name                  = "DbusXbar",
+                standard              = "axi",
+                data_width            = 32,
+                address_width         = 32,
+                bursting              = True,
+                interconnect          = "crossbar",
+                interconnect_register = False, # this parameter seems to be ignored and is assumed false
+            )
+            self.submodules.d_xbar = self.d_xbar
+            self.d_xbar.add_master(name="cpu_dbus", master=self.dbus_axi)
             self.d_xbar.add_slave(
                 name="peripherals",
                 slave=dbus_peri,
-                region=SoCRegion(self.mem_map["periph"], size =0x2000_0000, mode = "rw", cached = True) # THIS IS A LIE, it's actually not cached. Need to add a check/test for the differential of cached v uncached because the definition is out-of-band from LiteX
+                region=SoCRegion(self.mem_map["periph"], size =0x1000_0000, mode = "rw", cached = True) # THIS IS A LIE, it's actually not cached. Need to add a check/test for the differential of cached v uncached because the definition is out-of-band from LiteX
             )
-        else:
-            # use automatic LiteX inference
-            dbus_lite = axi.AXILiteInterface(data_width=32, address_width=32)
             self.d_xbar.add_slave(
-                name="peripherals",
-                slave=dbus_lite,
-                region=SoCRegion(self.mem_map["periph"], size =0x2000_0000, mode = "rw", cached = True) # THIS IS A LIE, it's actually not cached. Need to add a check/test for the differential of cached v uncached because the definition is out-of-band from LiteX
+                name="corecsr",
+                slave=axi_csr,
+                region=SoCRegion(self.mem_map["csr"], size=0x0200_0000, mode = "rw", cached = True)
+            )
+            self.d_xbar.add_slave(
+                name="memory",
+                slave=dbus,
+                region=SoCRegion(self.mem_map["memory"], size=0x2000_0000, mode = "rwx", cached = True)
             )
 
-        self.d_xbar.add_slave(
-            name="memory",
-            slave=dbus,
-            region=SoCRegion(self.mem_map["memory"], size = 0x2000_0000, mode = "rwx", cached = True)
-        )
 
         # Expose AXI-Lite Interfaces.
-        self.periph_buses     = [] # Peripheral buses (Connected to main SoC's bus). Leave blank because we don't want any bus to me inferred for the core generation.
-        self.memory_buses     = [['ibus', ibus], ['dbus', dbus], ['pbus', dbus_lite]]   # Memory buses (Connected directly to crossbar to main memory).
+        self.periph_buses     = [corecsr] # Peripheral buses (Connected to main SoC's bus). Leave blank because we don't want any bus to me inferred for the core generation.
+        self.memory_buses     = [
+            ['ibus', ibus],
+            ['dbus', dbus],
+            ['pbus', peripherals],
+        ]   # Memory buses (Connected directly to crossbar to main memory).
 
         # CPU Instance.
         self.cpu_params = dict(
