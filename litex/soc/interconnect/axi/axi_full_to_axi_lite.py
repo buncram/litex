@@ -64,13 +64,12 @@ class AXI2AXILite(Module):
         )
         fsm.act("READ",
             # ar (read command)
-            axi_lite.ar.valid.eq(ax_beat.valid & ~_cmd_done
-                & ~(ax_beat.valid & ax_beat.last & axi_lite.ar.ready)
-            ),
+            axi_lite.ar.valid.eq(ax_beat.valid & ~_cmd_done),
             axi_lite.ar.addr.eq(ax_beat.addr),
-            ax_beat.ready.eq(axi_lite.ar.ready),
+            ax_beat.ready.eq(axi_lite.ar.ready & ~_cmd_done),
             If(ax_beat.valid & ax_beat.last,
                 If(axi_lite.ar.ready,
+                    ax_beat.ready.eq(0),
                     NextValue(_cmd_done, 1)
                 )
             ),
@@ -92,9 +91,7 @@ class AXI2AXILite(Module):
         self.comb += axi_lite.b.ready.eq(1)
         fsm.act("WRITE",
             # aw (write command)
-            axi_lite.aw.valid.eq(ax_beat.valid & ~_cmd_done
-                & ~(ax_beat.valid & ax_beat.last & axi_lite.aw.ready)
-            ),
+            axi_lite.aw.valid.eq(ax_beat.valid & ~_cmd_done),
             axi_lite.aw.addr.eq(ax_beat.addr),
             ax_beat.ready.eq(axi_lite.aw.ready & ~_cmd_done),
             If(ax_beat.valid & ax_beat.last,

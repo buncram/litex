@@ -170,23 +170,15 @@ def axi_lite_to_simple(axi_lite, port_adr, port_dat_r, port_dat_w=None, port_we=
                 NextState("SEND-WRITE-RESPONSE")
             )
         ).Elif(do_read,
-            If(axi_lite.r.valid,
-                port_adr.eq(axi_lite.ar.addr[adr_shift:]),
-            ).Else(
-                port_adr.eq(0),
-            ),
             nocomb_axl_ar_ready.eq(1),
+            port_adr.eq(axi_lite.ar.addr[adr_shift:]),
             NextState("SEND-READ-RESPONSE"),
         )
     )
     fsm.act("SEND-READ-RESPONSE",
         NextValue(last_was_read, 1),
         # As long as we have correct address port.dat_r will be valid.
-        If(axi_lite.r.valid,
-            port_adr.eq(axi_lite.ar.addr[adr_shift:]),
-        ).Else(
-            port_adr.eq(0),
-        ),
+        port_adr.eq(axi_lite.ar.addr[adr_shift:]),
         axi_lite.r.data.eq(port_dat_r),
         axi_lite.r.resp.eq(RESP_OKAY),
         nocomb_axl_r_valid.eq(1),
