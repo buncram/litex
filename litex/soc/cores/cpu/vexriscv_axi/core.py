@@ -18,6 +18,7 @@ from litex.soc.integration.soc import SoCBusHandler
 
 from axi_axil_adapter import AXI2AXILiteAdapter
 from axi_crossbar import AXICrossbar
+from axi_common import *
 
 class Open(Signal): pass
 
@@ -86,6 +87,8 @@ class VexRiscvAxi(CPU):
         self.external_variant = None
         self.reset            = Signal()
         self.interrupt        = Signal(32)
+        self.trimming_reset   = Signal(32)
+        self.trimming_reset_ena = Signal()
 
         # Create AXI-Full Interfaces, attached to the CPU
         self.ibus_axi   =  ibus = axi.AXIInterface(data_width=64, address_width=32, id_width = 1, bursting=True)
@@ -285,7 +288,15 @@ class VexRiscvAxi(CPU):
 
     def set_reset_address(self, reset_address):
         self.reset_address = reset_address
-        self.cpu_params.update(i_externalResetVector=Signal(32, reset=reset_address))
+        reset_mux = Signal(32, reset=reset_address)
+        self.comb += [
+            If(self.trimming_reset_ena,
+                reset_mux.eq(self.trimming_reset)
+            ).Else(
+                reset_mux.eq(Signal(32, reset=reset_address))
+            )
+        ]
+        self.cpu_params.update(i_externalResetVector=reset_mux)
 
     def add_timer(self):
         self.submodules.timer = VexRiscvTimer()
