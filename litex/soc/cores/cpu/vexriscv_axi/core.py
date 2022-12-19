@@ -128,7 +128,13 @@ class VexRiscvAxi(CPU):
         if not litex_axi:
             d_xbar = AXICrossbar(platform=platform)
             self.submodules += d_xbar
-            d_xbar.add_slave(name = "cpu", s_axi=self.dbus_axi)
+            d_xbar.add_slave(name = "cpu", s_axi=self.dbus_axi,
+                aw_reg = AXIRegister.BYPASS,
+                w_reg  = AXIRegister.BYPASS,
+                b_reg  = AXIRegister.BYPASS,
+                ar_reg = AXIRegister.BYPASS,
+                r_reg  = AXIRegister.BYPASS,
+            )
             d_xbar.add_master(name = "peripherals", m_axi=dbus_peri, origin=self.mem_map["periph"], size=0x1000_0000)
             d_xbar.add_master(name = "corecsr", m_axi=axi_csr, origin=self.mem_map["csr"], size=0x0200_0000)
             d_xbar.add_master(name = "memory", m_axi=dbus, origin=self.mem_map["memory"], size=0x2000_0000)
