@@ -19,6 +19,7 @@ from litex.soc.integration.soc import SoCBusHandler
 from axi_axil_adapter import AXI2AXILiteAdapter
 from axi_crossbar import AXICrossbar
 from axi_common import *
+from litex.soc.integration.doc import AutoDoc,ModuleDoc
 
 class Open(Signal): pass
 
@@ -45,7 +46,7 @@ class VexRiscvTimer(Module, AutoCSR):
 
 # VexRiscv on AXI ----------------------------------------------------------------------------------------
 
-class VexRiscvAxi(CPU):
+class VexRiscvAxi(CPU, AutoDoc):
     category             = "softcore"
     family               = "riscv"
     name                 = "vexriscv_axi"
@@ -80,15 +81,94 @@ class VexRiscvAxi(CPU):
         flags += " -D__vexriscv__"
         return flags
 
-    def __init__(self, platform, variant="standard-debug", with_timer=False, litex_axi=False):
+    def __init__(self, platform, variant="standard-debug", with_timer=False, litex_axi=False, link_docs=True):
         self.platform         = platform
         self.variant          = variant
         self.human_name       = "VexRiscvAxi4"
         self.external_variant = None
         self.reset            = Signal()
         self.interrupt        = Signal(32)
+
+        MEMORY_LEN = 0x2000_0000
+        # terrible pseudo-parser to extract I/O ranges from the source file used to generate the verilog definition of the CPU
+        non_cached_prefix = []
+        SOURCE=os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../../pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog/src/main/scala/vexriscv/GenCramSoC.scala"))
+        with open(SOURCE, "r") as s:
+            lines = s.readlines()
+            inside_mmu_indent = None
+            for line in lines:
+                if inside_mmu_indent is not None:
+                    cheesyparse = line.rstrip().split('===')
+                    if len(cheesyparse) > 1:
+                        assert '31 downto 28' in cheesyparse[0], "Rewrite Scala source parsing to handle a wider range of ioRange decoder cases!"
+                        if cheesyparse[0].lstrip(' ').startswith('//'): # filter commented lines
+                            continue
+                        non_cached_prefix += [int(cheesyparse[1].split('//')[0], 16)] # remove trailing comments
+                    indent = len(line) - len(line.lstrip(' '))
+                    if indent <= inside_mmu_indent:
+                        inside_mmu_indent = None
+                if 'new MmuPlugin' in line:
+                    inside_mmu_indent = len(line) - len(line.lstrip(' '))
+
+            non_cached_prettyprint = ""
+            start_region = None
+            end_region = None
+            for region in non_cached_prefix:
+                if start_region is None:
+                    start_region = region
+                    end_region = region
+                else:
+                    if region - end_region == 1:
+                        end_region = region
+                    else:
+                        non_cached_prettyprint += "   - 0x{:X}0000000 - {:X}FFFFFFF\n".format(start_region, end_region )
+                        start_region = region
+                        end_region = region
+            non_cached_prettyprint += "   - 0x{:X}0000000 - {:X}FFFFFFF\n".format(start_region, end_region)
+
+        self.intro = ModuleDoc("""
+This `VexRiscv <https://github.com/SpinalHDL/VexRiscv#vexriscv-architecture>`_ core provides the following bus interfaces:
+
+- 64-bit AXI-4 instruction cache bus (read-only cached)
+- Data bus crossbar
+
+  - 0x{:X}-{:X}: 32-bit AXI-4 data cache bus (r/w cached)
+  - 0x{:X}-{:X}: 32-bit AXI-lite peripheral bus (r/w uncached)
+- All busses run at ACLK speed
+
+The core itself contains the following features:
+
+- VexRiscv CPU (simple, in-order RV32-IMAC with pipelining)
+- Static branch prediction
+- 4k, 4-way D-cache
+- 4k, 4-way I-cache
+- MMU and 8-entry TLB
+- AES instruction extensions
+- Non-cached regions (used for I/O):
+
+{}
+   - Any non-cached regions not routed through peripheral bus are internal to the core block
+
+        """.format(
+            self.mem_map["memory"],
+            self.mem_map["memory"] + MEMORY_LEN - 1,
+            self.mem_map["periph"],
+            self.io_regions[self.mem_map["periph"]] + self.mem_map["periph"] - 1,
+            non_cached_prettyprint,
+        ))
+
+        # SoC-specific signals -------------------------------------------------------
+        # Trimming bits come from the ReRAM fuse bank. They are set at wafer sort.
+        # Reset vector is trimmable because there are two cores in the system with conflicting
+        # binary types, and we need to coordinate their start points in a flexible manner.
         self.trimming_reset   = Signal(32)
         self.trimming_reset_ena = Signal()
+
+        # SATP breakout. This is used to generate the "coreuser" signal, which indicates
+        # that the system is currently executing code in a trusted process space.
+        self.satp_mode = Signal()
+        self.satp_asid = Signal(9)
+        self.satp_ppn = Signal(22)
 
         # Create AXI-Full Interfaces, attached to the CPU
         self.ibus_axi   =  ibus = axi.AXIInterface(data_width=64, address_width=32, id_width = 1, bursting=True)
@@ -105,7 +185,7 @@ class VexRiscvAxi(CPU):
             self.d_xbar.add_slave(
                 name="peripherals",
                 slave=peripherals,
-                region=SoCRegion(self.mem_map["periph"], size=0x1000_0000, mode = "rw", cached = True) # THIS IS A LIE, it's actually not cached. Need to add a check/test for the differential of cached v uncached because the definition is out-of-band from LiteX
+                region=SoCRegion(self.mem_map["periph"], size=self.io_regions[self.mem_map["periph"]] + self.mem_map["periph"], mode = "rw", cached = True) # THIS IS A LIE, it's actually not cached. Need to add a check/test for the differential of cached v uncached because the definition is out-of-band from LiteX
             )
 
         if not litex_axi:
@@ -135,9 +215,9 @@ class VexRiscvAxi(CPU):
                 ar_reg = AXIRegister.BYPASS,
                 r_reg  = AXIRegister.BYPASS,
             )
-            d_xbar.add_master(name = "peripherals", m_axi=dbus_peri, origin=self.mem_map["periph"], size=0x1000_0000)
+            d_xbar.add_master(name = "peripherals", m_axi=dbus_peri, origin=self.mem_map["periph"], size=self.io_regions[self.mem_map["periph"]] + self.mem_map["periph"])
             d_xbar.add_master(name = "corecsr", m_axi=axi_csr, origin=self.mem_map["csr"], size=0x0200_0000)
-            d_xbar.add_master(name = "memory", m_axi=dbus, origin=self.mem_map["memory"], size=0x2000_0000)
+            d_xbar.add_master(name = "memory", m_axi=dbus, origin=self.mem_map["memory"], size=MEMORY_LEN)
         else:
             self.d_xbar = SoCBusHandler(
                 name                  = "DbusXbar",
@@ -183,6 +263,10 @@ class VexRiscvAxi(CPU):
             i_externalInterruptArray = self.interrupt,
             i_timerInterrupt         = 0,
             i_softwareInterrupt      = 0,
+
+            o_MmuPlugin_satp_mode = self.satp_mode,
+            o_MmuPlugin_satp_asid = self.satp_asid,
+            o_MmuPlugin_satp_ppn = self.satp_ppn,
 
             # Debug.
             # i_debugReset = ResetSignal() | self.reset, # handled in debugReset
@@ -428,77 +512,3 @@ class VexRiscvAxi(CPU):
         self.specials += Instance("VexRiscvAxi4", **self.cpu_params)
         if hasattr(self, "cfu_params"):
             self.specials += Instance("Cfu", **self.cfu_params)
-
-"""
-module VexRiscvAxi4 (
-  input      [31:0]   externalResetVector,//*
-  input               timerInterrupt,//
-  input               softwareInterrupt,//
-  input      [31:0]   externalInterruptArray,//
-  output              debug_resetOut,//*
-  output              iBusAxi_ar_valid,//
-  input               iBusAxi_ar_ready,//
-  output     [31:0]   iBusAxi_ar_payload_addr,//
-  output     [0:0]    iBusAxi_ar_payload_id, <---
-  output     [3:0]    iBusAxi_ar_payload_region,
-  output     [7:0]    iBusAxi_ar_payload_len,//
-  output     [2:0]    iBusAxi_ar_payload_size,//
-  output     [1:0]    iBusAxi_ar_payload_burst,//
-  output     [0:0]    iBusAxi_ar_payload_lock,//
-  output     [3:0]    iBusAxi_ar_payload_cache,//
-  output     [3:0]    iBusAxi_ar_payload_qos, <---
-  output     [2:0]    iBusAxi_ar_payload_prot,//
-  input               iBusAxi_r_valid,//
-  output              iBusAxi_r_ready,//
-  input      [63:0]   iBusAxi_r_payload_data,//
-  input      [0:0]    iBusAxi_r_payload_id, <---
-  input      [1:0]    iBusAxi_r_payload_resp,//
-  input               iBusAxi_r_payload_last,//
-  output              dBusAxi_aw_valid,//
-  input               dBusAxi_aw_ready,//
-  output     [31:0]   dBusAxi_aw_payload_addr,//
-  output     [0:0]    dBusAxi_aw_payload_id, <---
-  output     [3:0]    dBusAxi_aw_payload_region, <---
-  output     [7:0]    dBusAxi_aw_payload_len,//
-  output     [2:0]    dBusAxi_aw_payload_size,//
-  output     [1:0]    dBusAxi_aw_payload_burst,//
-  output     [0:0]    dBusAxi_aw_payload_lock,//
-  output     [3:0]    dBusAxi_aw_payload_cache,//
-  output     [3:0]    dBusAxi_aw_payload_qos, <---
-  output     [2:0]    dBusAxi_aw_payload_prot,//
-  output              dBusAxi_w_valid,//
-  input               dBusAxi_w_ready,//
-  output     [31:0]   dBusAxi_w_payload_data,//
-  output     [3:0]    dBusAxi_w_payload_strb,//
-  output              dBusAxi_w_payload_last,//
-  input               dBusAxi_b_valid,//
-  output              dBusAxi_b_ready,//
-  input      [0:0]    dBusAxi_b_payload_id, <---
-  input      [1:0]    dBusAxi_b_payload_resp,//
-  output              dBusAxi_ar_valid,//
-  input               dBusAxi_ar_ready,//
-  output     [31:0]   dBusAxi_ar_payload_addr,//
-  output     [0:0]    dBusAxi_ar_payload_id, <---
-  output     [3:0]    dBusAxi_ar_payload_region, <---
-  output     [7:0]    dBusAxi_ar_payload_len,//
-  output     [2:0]    dBusAxi_ar_payload_size,//
-  output     [1:0]    dBusAxi_ar_payload_burst,//
-  output     [0:0]    dBusAxi_ar_payload_lock,//
-  output     [3:0]    dBusAxi_ar_payload_cache,//
-  output     [3:0]    dBusAxi_ar_payload_qos, <---
-  output     [2:0]    dBusAxi_ar_payload_prot,//
-  input               dBusAxi_r_valid,//
-  output              dBusAxi_r_ready,//
-  input      [31:0]   dBusAxi_r_payload_data,//
-  input      [0:0]    dBusAxi_r_payload_id, <---
-  input      [1:0]    dBusAxi_r_payload_resp,//
-  input               dBusAxi_r_payload_last,//
-  input               jtag_tms,//*
-  input               jtag_tdi,//*
-  output              jtag_tdo,//*
-  input               jtag_tck,//*
-  input               clk,//
-  input               reset,//
-  input               debugReset//
-);
-"""
