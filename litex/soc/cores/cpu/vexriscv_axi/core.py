@@ -135,6 +135,8 @@ This `VexRiscv <https://github.com/SpinalHDL/VexRiscv#vexriscv-architecture>`_ c
   - 0x{:X}-{:X}: 32-bit AXI-4 data cache bus (r/w cached)
   - 0x{:X}-{:X}: 32-bit AXI-lite peripheral bus (r/w uncached)
 - All busses run at ACLK speed
+- WFI signal is broken out to `wfi_active`
+- `satp` signals broken out for `coreuser` interpretation
 
 The core itself contains the following features:
 
@@ -169,6 +171,9 @@ The core itself contains the following features:
         self.satp_mode = Signal()
         self.satp_asid = Signal(9)
         self.satp_ppn = Signal(22)
+
+        # WFI active signal
+        self.wfi_active = Signal()
 
         # Create AXI-Full Interfaces, attached to the CPU
         self.ibus_axi   =  ibus = axi.AXIInterface(data_width=64, address_width=32, id_width = 1, bursting=True)
@@ -357,6 +362,8 @@ The core itself contains the following features:
             i_dBusAxi_r_payload_resp    = self.dbus_axi.r.resp,
             i_dBusAxi_r_payload_data    = self.dbus_axi.r.data,
             i_dBusAxi_r_payload_id      = self.dbus_axi.r.id, # not on M3
+
+            o_CsrPlugin_inWfi           = self.wfi_active,
         )
         platform.add_source_dir("deps/pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog/VexRiscv_CranSoC.v")
 
