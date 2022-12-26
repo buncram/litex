@@ -215,7 +215,8 @@ The core itself contains the following features:
                 ar_reg = AXIRegister.BYPASS,
                 r_reg  = AXIRegister.BYPASS,
             )
-            d_xbar.add_master(name = "peripherals", m_axi=dbus_peri, origin=self.mem_map["periph"], size=self.io_regions[self.mem_map["periph"]] + self.mem_map["periph"])
+            d_xbar.add_master(name = "peripherals", m_axi=dbus_peri, origin=self.mem_map["periph"],
+                size=self.io_regions[self.mem_map["periph"]])
             d_xbar.add_master(name = "corecsr", m_axi=axi_csr, origin=self.mem_map["csr"], size=0x0200_0000)
             d_xbar.add_master(name = "memory", m_axi=dbus, origin=self.mem_map["memory"], size=MEMORY_LEN)
         else:
