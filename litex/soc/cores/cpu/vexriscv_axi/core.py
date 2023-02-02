@@ -174,6 +174,20 @@ The core itself contains the following features:
 
         # WFI active signal
         self.wfi_active = Signal()
+        # Privilege state
+        self.privilege = Signal(2)
+
+        if litex_axi:
+            self.d_xbar = SoCBusHandler(
+                name                  = "DbusXbar",
+                standard              = "axi",
+                data_width            = 32,
+                address_width         = 32,
+                bursting              = True,
+                interconnect          = "crossbar",
+                interconnect_register = False, # this parameter seems to be ignored and is assumed false
+            )
+            self.submodules.d_xbar = self.d_xbar
 
         # Create AXI-Full Interfaces, attached to the CPU
         self.ibus_axi   =  ibus = axi.AXIInterface(data_width=64, address_width=32, id_width = 1, bursting=True)
@@ -190,7 +204,7 @@ The core itself contains the following features:
             self.d_xbar.add_slave(
                 name="peripherals",
                 slave=peripherals,
-                region=SoCRegion(self.mem_map["periph"], size=self.io_regions[self.mem_map["periph"]] + self.mem_map["periph"], mode = "rw", cached = True) # THIS IS A LIE, it's actually not cached. Need to add a check/test for the differential of cached v uncached because the definition is out-of-band from LiteX
+                region=SoCRegion(self.mem_map["periph"], size=self.io_regions[self.mem_map["periph"]])
             )
 
         if not litex_axi:
@@ -199,6 +213,7 @@ The core itself contains the following features:
             corecsr = axi.AXILiteInterface(data_width=32, address_width=32)
             self.submodules += AXI2AXILiteAdapter(platform, axi_csr, corecsr)
         else:
+            axi_csr = axi.AXIInterface(data_width=32, address_width=32, id_width=1, bursting=True)
             corecsr = axi.AXILiteInterface(data_width=32, address_width=32)
             self.d_xbar.add_slave(
                 name="corecsr",
@@ -225,33 +240,14 @@ The core itself contains the following features:
             d_xbar.add_master(name = "corecsr", m_axi=axi_csr, origin=self.mem_map["csr"], size=0x0200_0000)
             d_xbar.add_master(name = "memory", m_axi=dbus, origin=self.mem_map["memory"], size=MEMORY_LEN)
         else:
-            self.d_xbar = SoCBusHandler(
-                name                  = "DbusXbar",
-                standard              = "axi",
-                data_width            = 32,
-                address_width         = 32,
-                bursting              = True,
-                interconnect          = "crossbar",
-                interconnect_register = False, # this parameter seems to be ignored and is assumed false
-            )
-            self.submodules.d_xbar = self.d_xbar
             self.d_xbar.add_master(name="cpu_dbus", master=self.dbus_axi)
-            self.d_xbar.add_slave(
-                name="peripherals",
-                slave=dbus_peri,
-                region=SoCRegion(self.mem_map["periph"], size =0x1000_0000, mode = "rw", cached = True) # THIS IS A LIE, it's actually not cached. Need to add a check/test for the differential of cached v uncached because the definition is out-of-band from LiteX
-            )
-            self.d_xbar.add_slave(
-                name="corecsr",
-                slave=axi_csr,
-                region=SoCRegion(self.mem_map["csr"], size=0x0200_0000, mode = "rw", cached = True)
-            )
+            # TODO: check these address regions!
+            # TODO: how to handle accesses to undecoded regions?
             self.d_xbar.add_slave(
                 name="memory",
                 slave=dbus,
                 region=SoCRegion(self.mem_map["memory"], size=0x2000_0000, mode = "rwx", cached = True)
             )
-
 
         # Expose AXI-Lite Interfaces.
         self.periph_buses     = [corecsr] # Peripheral buses (Connected to main SoC's bus). Leave blank because we don't want any bus to me inferred for the core generation.
@@ -364,8 +360,9 @@ The core itself contains the following features:
             i_dBusAxi_r_payload_id      = self.dbus_axi.r.id, # not on M3
 
             o_CsrPlugin_inWfi           = self.wfi_active,
+            o_CsrPlugin_privilege       = self.privilege,
         )
-        platform.add_source_dir("deps/pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog/VexRiscv_CranSoC.v")
+        platform.add_source_dir("deps/pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog/VexRiscv_CramSoC.v")
 
         # Add Timer (Optional).
         if with_timer:
