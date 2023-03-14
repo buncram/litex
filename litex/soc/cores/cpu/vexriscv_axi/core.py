@@ -92,7 +92,7 @@ class VexRiscvAxi(CPU, AutoDoc):
         MEMORY_LEN = 0x2000_0000
         # terrible pseudo-parser to extract I/O ranges from the source file used to generate the verilog definition of the CPU
         non_cached_prefix = []
-        SOURCE=os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../../pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog/src/main/scala/vexriscv/GenCramSoC.scala"))
+        SOURCE=os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../../../VexRiscv/GenCramSoC.scala"))
         with open(SOURCE, "r") as s:
             lines = s.readlines()
             inside_mmu_indent = None
@@ -362,7 +362,7 @@ The core itself contains the following features:
             o_CsrPlugin_inWfi           = self.wfi_active,
             o_CsrPlugin_privilege       = self.privilege,
         )
-        platform.add_source_dir("deps/pythondata-cpu-vexriscv/pythondata_cpu_vexriscv/verilog/VexRiscv_CramSoC.v")
+        platform.add_source_dir("VexRiscv/VexRiscv_CramSoC.v")
 
         # Add Timer (Optional).
         if with_timer:
