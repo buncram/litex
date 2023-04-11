@@ -177,6 +177,10 @@ The core itself contains the following features:
         # Privilege state
         self.privilege = Signal(2)
 
+        # self-test signals
+        self.cmbist = Signal()
+        self.cmatpg = Signal()
+
         if litex_axi:
             self.d_xbar = SoCBusHandler(
                 name                  = "DbusXbar",
@@ -361,6 +365,9 @@ The core itself contains the following features:
 
             o_CsrPlugin_inWfi           = self.wfi_active,
             o_CsrPlugin_privilege       = self.privilege,
+
+            i_CMBIST                    = self.cmbist,
+            i_CMATPG                    = self.cmatpg,
         )
         platform.add_source_dir("VexRiscv/VexRiscv_CramSoC.v")
 
