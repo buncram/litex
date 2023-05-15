@@ -86,7 +86,6 @@ class VexRiscvAxi(CPU, AutoDoc):
         self.variant          = variant
         self.human_name       = "VexRiscvAxi4"
         self.external_variant = None
-        self.reset            = Signal()
         self.interrupt        = Signal(32)
 
         MEMORY_LEN = 0x2000_0000
@@ -264,7 +263,7 @@ The core itself contains the following features:
         # CPU Instance.
         self.cpu_params = dict(
             i_clk                    = ClockSignal("sys"),
-            i_reset                  = ResetSignal("sys") | self.reset,
+            i_reset                  = ResetSignal("sys"),
 
             i_externalInterruptArray = self.interrupt,
             i_timerInterrupt         = 0,
@@ -475,7 +474,7 @@ The core itself contains the following features:
         ]
 
         self.cpu_params.update(
-            i_reset = ResetSignal() | self.reset | debug_reset,
+            i_reset = ResetSignal() | debug_reset,
             # i_iBusWishbone_ERR              = self.ibus.err | ibus_err,
             # i_dBusWishbone_ERR              = self.dbus.err | dbus_err,
             # i_debugReset                    = ResetSignal(), # this is provided by JTAG
