@@ -367,4 +367,14 @@ def endpoint_colorer(**kwargs) -> SigMapper:
         "indigo": suffixes2re(["first", "last"]),
     }, default="normal", **kwargs)
 
+def axi_ar_sorter(**kwargs) -> SigMapper:
+    suffixes = ["addr", "burst", "id", "len", "valid", "ready"]
+    return regex_sorter(suffixes2re(suffixes), **kwargs)
+
+def axi_ar_colorer(**kwargs) -> SigMapper:
+    return regex_colorer({
+        "normal": suffixes2re(["valid", "ready", "id", "len"]),
+        "yellow": suffixes2re(["addr", "id"]),
+    }, default="indigo", **kwargs)
+
 DEFAULT_ENDPOINT_MAPPERS = [endpoint_sorter(), endpoint_colorer()]

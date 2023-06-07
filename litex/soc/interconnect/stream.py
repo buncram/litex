@@ -981,14 +981,23 @@ class Pack(Module):
 
 class Pipeline(Module):
     def __init__(self, *modules):
-        n = len(modules)
-        m = modules[0]
+        self.modules = list(modules)
+        if len(self.modules):
+            self.finalize()
+
+    def add(self, module):
+        assert not self.finalized
+        self.modules.append(module)
+
+    def do_finalize(self):
+        n = len(self.modules)
+        m = self.modules[0]
         # Expose sink of first module if available.
         if hasattr(m, "sink"):
             self.sink = m.sink
         # Iterate on Modules/Endpoints.
         for i in range(1, n):
-            m_n = modules[i]
+            m_n = self.modules[i]
             # If m is an Endpoint, use it as Source, else use Module.source.
             source = m if isinstance(m, Endpoint) else m.source
             # If m_n is an Endpoint, use it as Sink, else use Module.sink.

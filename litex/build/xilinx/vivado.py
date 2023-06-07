@@ -101,6 +101,7 @@ class XilinxVivadoToolchain(GenericToolchain):
         super().__init__()
         self.bitstream_commands         = []
         self.additional_commands        = []
+        self.project_commands           = XilinxVivadoCommands()
         self.pre_synthesis_commands     = XilinxVivadoCommands()
         self.pre_placement_commands     = XilinxVivadoCommands()
         self.pre_routing_commands       = XilinxVivadoCommands()
@@ -223,6 +224,10 @@ class XilinxVivadoToolchain(GenericToolchain):
         if self.vivado_max_threads:
             tcl.append(f"set_param general.maxThreads {self.vivado_max_threads}")
 
+        # Add project commands
+        tcl.append("\n# Add project commands\n")
+        tcl.extend(c.format(build_name=self._build_name) for c in self.project_commands.resolve(self._vns))
+
         # Enable Xilinx Parameterized Macros
         if self._enable_xpm:
             tcl.append("\n# Enable Xilinx Parameterized Macros\n")
@@ -281,7 +286,7 @@ class XilinxVivadoToolchain(GenericToolchain):
             tcl.append("\n# Synthesis\n")
             synth_cmd = f"synth_design -directive {self.vivado_synth_directive} -top {self._build_name} -part {self.platform.device}"
             if self.platform.verilog_include_paths:
-                synth_cmd += f" -include_dirs \{{" ".join(self.platform.verilog_include_paths)}\}"
+                synth_cmd += f" -include_dirs {{{' '.join(self.platform.verilog_include_paths)}}}"
             tcl.append(synth_cmd)
         elif self._synth_mode == "yosys":
             tcl.append("\n# Read Yosys EDIF\n")
@@ -385,7 +390,6 @@ class XilinxVivadoToolchain(GenericToolchain):
 
         if tools.subprocess_call_filtered(shell + [script], common.colors) != 0:
             raise OSError("Error occured during Vivado's script execution.")
-
 
 def vivado_build_args(parser):
     toolchain_group = parser.add_argument_group(title="Vivado toolchain options")

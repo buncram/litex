@@ -29,13 +29,6 @@
 #endif
 
 /*-----------------------------------------------------------------------*/
-/* Helpers                                                               */
-/*-----------------------------------------------------------------------*/
-
-#define max(x, y) (((x) > (y)) ? (x) : (y))
-#define min(x, y) (((x) < (y)) ? (x) : (y))
-
-/*-----------------------------------------------------------------------*/
 /* SPI SDCard clocker functions                                          */
 /*-----------------------------------------------------------------------*/
 
@@ -64,7 +57,7 @@ static uint8_t spi_xfer(uint8_t byte) {
     /* Initiate SPI Xfer */
     spisdcard_control_write(8*SPI_LENGTH | SPI_START);
     /* Wait SPI Xfer to be done */
-    while(spisdcard_status_read() != SPI_DONE);
+    while((spisdcard_status_read() & SPI_DONE) != SPI_DONE);
     /* Read MISO and return it */
     return spisdcard_miso_read();
 }

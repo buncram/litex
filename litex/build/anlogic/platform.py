@@ -13,7 +13,7 @@ from litex.build.anlogic import common, anlogic
 # AnlogicPlatform ----------------------------------------------------------------------------------
 
 class AnlogicPlatform(GenericPlatform):
-    bitstream_ext = ".fs"
+    _bitstream_ext = ".bit"
 
     _supported_toolchains = ["td"]
 
@@ -36,5 +36,4 @@ class AnlogicPlatform(GenericPlatform):
         return self.toolchain.build(self, *args, **kwargs)
 
     def add_period_constraint(self, clk, period):
-        if clk is None: return
         self.toolchain.add_period_constraint(self, clk, period)

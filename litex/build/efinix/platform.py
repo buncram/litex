@@ -16,16 +16,20 @@ from litex.build.efinix import EfinixDbParser
 # EfinixPlatform -----------------------------------------------------------------------------------
 
 class EfinixPlatform(GenericPlatform):
-    bitstream_ext = ".bit"
+    _bitstream_ext = {
+        "sram"  : ".bit",
+        "flash" : ".hex"
+    }
 
     _supported_toolchains = ["efinity"]
 
-    def __init__(self, *args, iobank_info=None, toolchain="efinity", **kwargs):
+    def __init__(self, *args, iobank_info=None, toolchain="efinity", spi_mode="active", **kwargs):
         GenericPlatform.__init__(self, *args, **kwargs)
 
         self.timing_model = self.device[-2:]
         self.device       = self.device[:-2]
         self.iobank_info  = iobank_info
+        self.spi_mode     = spi_mode
         if self.device[:2] == "Ti":
             self.family = "Titanium"
         else:
@@ -59,9 +63,6 @@ class EfinixPlatform(GenericPlatform):
         return self.toolchain.build(self, *args, **kwargs)
 
     def add_period_constraint(self, clk, period):
-        if clk is None: return
-        if hasattr(clk, "p"):
-            clk = clk.p
         self.toolchain.add_period_constraint(self, clk, period)
 
     def add_false_path_constraint(self, from_, to):

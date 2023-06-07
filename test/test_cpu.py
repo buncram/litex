@@ -42,11 +42,11 @@ class TestCPU(unittest.TestCase):
             "firev",        # (riscv   / softcore)
             "marocchino",   # (or1k    / softcore)
             "naxriscv",     # (riscv   / softcore)
-            "neorv32",      # (riscv   / softcore)
             "serv",         # (riscv   / softcore)
             "vexriscv",     # (riscv   / softcore)
             "vexriscv_smp", # (riscv   / softcore)
             "microwatt",    # (ppc64   / softcore)
+            "neorv32",      # (riscv   / softcore)
         ]
         untested_cpus = [
             "blackparrot",  # (riscv   / softcore) -> Broken install?

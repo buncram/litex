@@ -14,11 +14,16 @@ from litex.build.xilinx import common, vivado, ise, yosys_nextpnr
 # XilinxPlatform -----------------------------------------------------------------------------------
 
 class XilinxPlatform(GenericPlatform):
-    bitstream_ext = ".bit"
+    _bitstream_ext = {
+        "sram"  : ".bit",
+        "flash" : ".bin"
+    }
 
     _supported_toolchains = {
-        "7series"  : ["vivado", "f4pga", "yosys+nextpnr"],
-        "spartan6" : ["ise"],
+        "spartan6"    : ["ise"],
+        "7series"     : ["vivado", "f4pga", "yosys+nextpnr"],
+        "ultrascale"  : ["vivado"],
+        "ultrascale+" : ["vivado"],
     }
 
     def __init__(self, *args, toolchain="ise", **kwargs):
@@ -65,6 +70,8 @@ class XilinxPlatform(GenericPlatform):
             so.update(common.xilinx_s7_special_overrides)
         if self.device[:4] == "xcku":
             so.update(common.xilinx_us_special_overrides)
+        if self.device[:4] == "xcau":
+            so.update(common.xilinx_us_special_overrides)
         so.update(special_overrides)
         return GenericPlatform.get_verilog(self, *args,
             special_overrides = so,
@@ -77,11 +84,8 @@ class XilinxPlatform(GenericPlatform):
     def build(self, *args, **kwargs):
         return self.toolchain.build(self, *args, **kwargs)
 
-    def add_period_constraint(self, clk, period):
-        if clk is None: return
-        if hasattr(clk, "p"):
-            clk = clk.p
-        self.toolchain.add_period_constraint(self, clk, period)
+    def add_period_constraint(self, clk, period, keep=True):
+        self.toolchain.add_period_constraint(self, clk, period, keep=keep)
 
     def add_false_path_constraint(self, from_, to):
         if hasattr(from_, "p"):
@@ -125,13 +129,22 @@ class XilinxPlatform(GenericPlatform):
         else:
             return dict()
 
-# Xilinx7SeriesPlatform -----------------------------------------------------------------------------
-
-class Xilinx7SeriesPlatform(XilinxPlatform):
-    device_family = "7series"
-
 # XilinxSpartan6Platform ---------------------------------------------------------------------------
 
 class XilinxSpartan6Platform(XilinxPlatform):
     device_family = "spartan6"
 
+# Xilinx7SeriesPlatform ----------------------------------------------------------------------------
+
+class Xilinx7SeriesPlatform(XilinxPlatform):
+    device_family = "7series"
+
+# XilinxUSPlatform ---------------------------------------------------------------------------------
+
+class XilinxUSPlatform(XilinxPlatform):
+    device_family = "ultrascale"
+
+# XilinxUSPPlatform --------------------------------------------------------------------------------
+
+class XilinxUSPPlatform(XilinxPlatform):
+    device_family = "ultrascale+"

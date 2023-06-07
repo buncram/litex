@@ -10,7 +10,7 @@ from litex.build.microsemi import common, libero_soc
 # MicrosemiPlatform --------------------------------------------------------------------------------
 
 class MicrosemiPlatform(GenericPlatform):
-    bitstream_ext = ".bit"
+    _bitstream_ext = ".bit"
 
     _supported_toolchains = ["libero_soc_polarfire"]
 
@@ -34,10 +34,6 @@ class MicrosemiPlatform(GenericPlatform):
         return self.toolchain.build(self, *args, **kwargs)
 
     def add_period_constraint(self, clk, period):
-        if clk is None: return
-        clk.attr.add("keep")
-        if hasattr(clk, "p"):
-            clk = clk.p
         self.toolchain.add_period_constraint(self, clk, period)
 
     def add_false_path_constraint(self, from_, to):
