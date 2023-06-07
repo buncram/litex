@@ -60,7 +60,12 @@ sim: $(OBJS_SIM) | mkdir
 		-Wno-WIDTH \
 		-Wno-COMBDLY \
 		-Wno-CASEINCOMPLETE \
+		--no-timing \
+		+define+ARM_UD_MODEL\
+		+define+ARM_DISABLE_EMA_CHECK\
+		+define+SIM\
 		--relative-includes
+#		--debug --debug-check
 	make -j$(JOBS) -C $(OBJ_DIR) -f Vsim.mk Vsim
 
 .PHONY: modules
