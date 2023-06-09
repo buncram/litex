@@ -127,11 +127,13 @@ class VexRiscvAxi(CPU, AutoDoc):
         self.intro = ModuleDoc("""
 This `VexRiscv <https://github.com/SpinalHDL/VexRiscv#vexriscv-architecture>`_ core provides the following bus interfaces:
 
-- 64-bit AXI-4 instruction cache bus (read-only cached)
+- 64-bit AXI-4 instruction cache bus (read-only cached) with full access to all locations in memory.
 - Data bus crossbar
 
   - 0x{:X}-{:X}: 32-bit AXI-4 data cache bus (r/w cached)
   - 0x{:X}-{:X}: 32-bit AXI-lite peripheral bus (r/w uncached)
+  - 0x{:x}-{:x}: 32-bit internal bus (r/w uncached) local to RV32
+  - All other locations in memory are not accessible by RV32 LD/ST unit
 - All busses run at ACLK speed
 - WFI signal is broken out to `wfi_active`
 - `satp` signals broken out for `coreuser` interpretation
@@ -150,10 +152,9 @@ The core itself contains the following features:
    - Any non-cached regions not routed through peripheral bus are internal to the core block
 
         """.format(
-            self.mem_map["memory"],
-            self.mem_map["memory"] + MEMORY_LEN - 1,
-            self.mem_map["periph"],
-            self.io_regions[self.mem_map["periph"]] + self.mem_map["periph"] - 1,
+            self.mem_map["memory"], self.mem_map["memory"] + MEMORY_LEN - 1,
+            self.mem_map["periph"], self.io_regions[self.mem_map["periph"]] + self.mem_map["periph"] - 1,
+            self.mem_map["csr"], self.io_regions[self.mem_map["csr"]] + self.mem_map["csr"] - 1,
             non_cached_prettyprint,
         ))
 
