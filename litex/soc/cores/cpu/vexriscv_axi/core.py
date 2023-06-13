@@ -369,87 +369,15 @@ The core itself contains the following features:
         self.cpu_params.update(i_timerInterrupt=self.timer.interrupt)
 
     def add_debug(self):
-        debug_reset = Signal()
-
-        # ibus_err = Signal()
-        # dbus_err = Signal()
-
-        # self.i_cmd_valid           = Signal()
-        # self.i_cmd_payload_wr      = Signal()
-        # self.i_cmd_payload_address = Signal(8)
-        # self.i_cmd_payload_data    = Signal(32)
-        # self.o_cmd_ready           = Signal()
-        # self.o_rsp_data            = Signal(32)
-        self.o_resetOut            = Signal()
-
+        self.o_resetOut   = Signal()
         reset_debug_logic = Signal()
-
-        # self.transfer_complete     = Signal()
-        # self.transfer_in_progress  = Signal()
-        # self.transfer_wait_for_ack = Signal()
-
-        # self.debug_bus = wishbone.Interface()
-
-        # self.sync += self.debug_bus.dat_r.eq(self.o_rsp_data)
+        debug_reset       = Signal()
+        self.sync += reset_debug_logic.eq(self.o_resetOut)
         self.sync += debug_reset.eq(reset_debug_logic | ResetSignal())
 
-        self.sync += [
-            # # CYC is held high for the duration of the transfer.
-            # # STB is kept high when the transfer finishes (write)
-            # # or the master is waiting for data (read), and stays
-            # # there until ACK, ERR, or RTY are asserted.
-            # If((self.debug_bus.stb & self.debug_bus.cyc)
-            # & (~self.transfer_in_progress)
-            # & (~self.transfer_complete)
-            # & (~self.transfer_wait_for_ack),
-            #     self.i_cmd_payload_data.eq(self.debug_bus.dat_w),
-            #     self.i_cmd_payload_address.eq((self.debug_bus.adr[0:6] << 2) | 0),
-            #     self.i_cmd_payload_wr.eq(self.debug_bus.we),
-            #     self.i_cmd_valid.eq(1),
-            #     self.transfer_in_progress.eq(1),
-            #     self.transfer_complete.eq(0),
-            #     self.debug_bus.ack.eq(0)
-            # ).Elif(self.transfer_in_progress,
-            #     If(self.o_cmd_ready,
-            #         self.i_cmd_valid.eq(0),
-            #         self.i_cmd_payload_wr.eq(0),
-            #         self.transfer_complete.eq(1),
-            #         self.transfer_in_progress.eq(0)
-            #     )
-            # ).Elif(self.transfer_complete,
-            #     self.transfer_complete.eq(0),
-            #     self.debug_bus.ack.eq(1),
-            #     self.transfer_wait_for_ack.eq(1)
-            # ).Elif(self.transfer_wait_for_ack & ~(self.debug_bus.stb & self.debug_bus.cyc),
-            #     self.transfer_wait_for_ack.eq(0),
-            #     self.debug_bus.ack.eq(0)
-            # ),
-            # Force a Wishbone error if transferring during a reset sequence.
-            # Because o_resetOut is multiple cycles and i.stb/d.stb should
-            # deassert one cycle after i_err/i_ack/d_err/d_ack are asserted,
-            # this will give i_err and o_err enough time to be reset to 0
-            # once the reset cycle finishes.
-            If(self.o_resetOut,
-                # If(self.ibus.cyc & self.ibus.stb, ibus_err.eq(1)).Else(ibus_err.eq(0)),
-                # If(self.dbus.cyc & self.dbus.stb, dbus_err.eq(1)).Else(dbus_err.eq(0)),
-                reset_debug_logic.eq(1))
-            .Else(
-                reset_debug_logic.eq(0)
-            )
-        ]
-
         self.cpu_params.update(
-            i_reset = ResetSignal() | debug_reset,
-            # i_iBusWishbone_ERR              = self.ibus.err | ibus_err,
-            # i_dBusWishbone_ERR              = self.dbus.err | dbus_err,
-            # i_debugReset                    = ResetSignal(), # this is provided by JTAG
-            # i_debug_bus_cmd_valid           = self.i_cmd_valid,
-            # i_debug_bus_cmd_payload_wr      = self.i_cmd_payload_wr,
-            # i_debug_bus_cmd_payload_address = self.i_cmd_payload_address,
-            # i_debug_bus_cmd_payload_data    = self.i_cmd_payload_data,
-            # o_debug_bus_cmd_ready           = self.o_cmd_ready,
-            # o_debug_bus_rsp_data            = self.o_rsp_data,
-            o_debug_resetOut                = self.o_resetOut
+            i_reset            = ResetSignal() | debug_reset,
+            o_debug_resetOut   = self.o_resetOut
         )
 
     @staticmethod
