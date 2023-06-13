@@ -340,16 +340,12 @@ The core itself contains the following features:
             self.add_debug()
 
     def add_jtag(self, pads):
-        jtag_disable = Signal()
-        self.comb += jtag_disable.eq(pads.disable)
-        jtag_tdo = Signal()
-        self.comb += pads.tdo.eq(~jtag_disable & jtag_tdo)
         self.cpu_params.update(
-            i_jtag_tdi      = ~jtag_disable & pads.tdi,
-            o_jtag_tdo      = jtag_tdo,
-            i_jtag_tms      = ~jtag_disable & pads.tms,
-            i_jtag_tck      = ~jtag_disable & pads.tck,
-            i_debugReset    = pads.trst,
+            i_jtag_tdi      = pads.tdi,
+            o_jtag_tdo      = pads.tdo,
+            i_jtag_tms      = pads.tms,
+            i_jtag_tck      = pads.tck,
+            i_debugReset    = ~pads.trst_n,
         )
 
     def set_reset_address(self, reset_address):
