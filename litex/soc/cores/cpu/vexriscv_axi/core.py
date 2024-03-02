@@ -16,9 +16,9 @@ from litex.soc.interconnect import wishbone
 from litex.soc.integration.soc import SoCRegion, SoCIORegion
 from litex.soc.integration.soc import SoCBusHandler
 
-from axi_axil_adapter import AXI2AXILiteAdapter
-from axi_crossbar import AXICrossbar
-from axi_common import *
+from soc_oss.axi_axil_adapter import AXI2AXILiteAdapter
+from soc_oss.axi_crossbar import AXICrossbar
+from soc_oss.axi_common import *
 from litex.soc.integration.doc import AutoDoc,ModuleDoc
 
 class Open(Signal): pass
