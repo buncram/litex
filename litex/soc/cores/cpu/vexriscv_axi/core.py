@@ -179,6 +179,7 @@ The core itself contains the following features:
         # self-test signals
         self.cmbist = Signal()
         self.cmatpg = Signal()
+        self.vexsramtrm = Signal(3)
 
         # Create AXI-Full Interfaces, attached to the CPU
         self.ibus_axi   =  ibus = axi.AXIInterface(data_width=64, address_width=32, id_width = 1, bursting=True)
@@ -328,6 +329,7 @@ The core itself contains the following features:
 
             i_CMBIST                    = self.cmbist,
             i_CMATPG                    = self.cmatpg,
+            i_sramtrm                   = self.vexsramtrm,
         )
         platform.add_source_dir("VexRiscv/VexRiscv_CramSoC.v")
 
