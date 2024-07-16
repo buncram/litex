@@ -125,7 +125,10 @@ class VexRiscvAxi(CPU, AutoDoc):
             non_cached_prettyprint += "   - 0x{:X}0000000 - {:X}FFFFFFF\n".format(start_region, end_region)
 
         self.intro = ModuleDoc("""
-This `VexRiscv <https://github.com/SpinalHDL/VexRiscv#vexriscv-architecture>`_ core provides the following bus interfaces:
+
+This is a RISCV32-IMAC-Zkn(e/d) (32-bit, RV32 instruction set with integer, multiply, atomic, compressed,
+and AES cryptography extensions) CPU. It is based on the `VexRiscv <https://github.com/SpinalHDL/VexRiscv#vexriscv-architecture>`_
+core, and provides the following bus interfaces:
 
 - 64-bit AXI-4 instruction cache bus (read-only cached) with full access to all locations in memory.
 - Data bus crossbar
@@ -145,7 +148,7 @@ The core itself contains the following features:
 - 4k, 4-way D-cache
 - 4k, 4-way I-cache
 - MMU and 8-entry TLB
-- AES instruction extensions
+- AES scalar instruction extensions, compliant with revision 20230723 of the RISC-V ISA
 - Non-cached regions (used for I/O):
 
 {}
